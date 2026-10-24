@@ -1,0 +1,12 @@
+[Unit]
+Description=nac data backup
+After=network.target
+
+[Service]
+Type=oneshot
+User=root
+Environment=NAC_ROOT=/srv/nac
+ExecStart=/usr/local/sbin/nac-backup
+UMask=0077
+Nice=10
+IOSchedulingClass=idle

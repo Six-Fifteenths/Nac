@@ -157,6 +157,10 @@ fn selftest_run(routes: &routes::Routes, site_name: &str) -> eframe::Result<()> 
         return Ok(());
     };
     let mut client = net::Client::new(site.endpoint.clone());
+    match client.hello() {
+        Ok(version) => println!("protocol: {version}"),
+        Err(()) => println!("protocol: legacy"),
+    }
     match client.manifest() {
         Ok(entries) => {
             println!("site {site_name}: {} entries", entries.len());

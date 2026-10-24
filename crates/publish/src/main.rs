@@ -13,6 +13,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 mod images;
@@ -127,6 +128,10 @@ fn run(site: &Path, data: &Path, archive: Option<&Path>) -> Result<(), String> {
         image_ids.insert(rel.clone(), id);
     }
 
+    let previous_gen = fs::read_to_string(data.join("current"))
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty() && !s.contains('/') && !s.contains('\\'));
     let gen = next_gen_name(data)?;
     let gen_dir = data.join("gen").join(&gen);
     fs::create_dir_all(gen_dir.join("scripts")).map_err(|e| e.to_string())?;
@@ -148,7 +153,19 @@ fn run(site: &Path, data: &Path, archive: Option<&Path>) -> Result<(), String> {
         let raw = fs::read(src).map_err(|e| format!("{rel}: {e}"))?;
         let clean = images::strip(&raw).map_err(|e| format!("{rel}: {e}"))?;
         let rel_file = format!("img/{id}.bin");
-        fs::write(gen_dir.join(&rel_file), &clean.bytes).map_err(|e| e.to_string())?;
+        let dest = gen_dir.join(&rel_file);
+        let linked = previous_gen.as_ref().and_then(|prev| {
+            let old = data.join("gen").join(prev).join(&rel_file);
+            let old_bytes = fs::read(&old).ok()?;
+            if old_bytes == clean.bytes {
+                fs::hard_link(&old, &dest).ok()
+            } else {
+                None
+            }
+        });
+        if linked.is_none() {
+            fs::write(&dest, &clean.bytes).map_err(|e| e.to_string())?;
+        }
         image_sizes.insert(rel.clone(), (id, clean.width, clean.height));
         image_entries.push(serde_json::json!({
             "id": id,
@@ -172,13 +189,32 @@ fn run(site: &Path, data: &Path, archive: Option<&Path>) -> Result<(), String> {
         let title = page_title(&text).unwrap_or_default();
         let rel_file = format!("scripts/{id}.py");
         fs::write(gen_dir.join(&rel_file), text.as_bytes()).map_err(|e| e.to_string())?;
-        page_entries.push(serde_json::json!({
-            "id": id,
-            "kind": "dynamic",
-            "title": title,
-            "hash": "0",
-            "file": rel_file,
-        }));
+
+        let is_static = text.lines().any(|line| line.trim() == "# nac:static");
+        if is_static {
+            let body = render_static(&gen_dir.join("scripts"), *id, data)?;
+            if body.len() > protocol::CHUNK {
+                return Err(format!("{id}.py: static output exceeds {} bytes", protocol::CHUNK));
+            }
+            let static_file = format!("static/{id}.txt");
+            fs::create_dir_all(gen_dir.join("static")).map_err(|e| e.to_string())?;
+            fs::write(gen_dir.join(&static_file), &body).map_err(|e| e.to_string())?;
+            page_entries.push(serde_json::json!({
+                "id": id,
+                "kind": "static",
+                "title": title,
+                "hash": format!("{:016x}", protocol::fnv1a64(&body)),
+                "file": static_file,
+            }));
+        } else {
+            page_entries.push(serde_json::json!({
+                "id": id,
+                "kind": "dynamic",
+                "title": title,
+                "hash": format!("{:016x}", protocol::fnv1a64(text.as_bytes())),
+                "file": rel_file,
+            }));
+        }
     }
 
     let manifest = serde_json::json!({
@@ -291,6 +327,40 @@ fn check_syntax(text: &str, rel: &str) -> Result<(), String> {
     Err(format!("{rel}: {detail}"))
 }
 
+
+fn render_static(scripts: &Path, id: u16, data: &Path) -> Result<Vec<u8>, String> {
+    let python = std::env::var("NAC_PYTHON").unwrap_or_else(|_| {
+        if cfg!(windows) {
+            "python".to_string()
+        } else {
+            "python3".to_string()
+        }
+    });
+    let temp = data
+        .join("state")
+        .join("tmp")
+        .join(format!("static-{id}-{}", std::process::id()));
+    fs::create_dir_all(&temp).map_err(|e| e.to_string())?;
+    let output = Command::new(&python)
+        .arg("-B")
+        .arg(format!("{id}.py"))
+        .current_dir(scripts)
+        .env("NAC_INPUT", format!("{{\"page\":{id},\"fields\":{{}}}}"))
+        .env("NAC_PAGE", id.to_string())
+        .env("NAC_DATA_DIR", &temp)
+        .env("NAC_SESSION_FILE", temp.join("session.json"))
+        .env("PYTHONUTF8", "1")
+        .env("PYTHONIOENCODING", "utf-8")
+        .output()
+        .map_err(|e| format!("static {id}.py: {e}"))?;
+    let _ = fs::remove_dir_all(&temp);
+    if !output.status.success() {
+        let err = String::from_utf8_lossy(&output.stderr);
+        let detail = err.lines().last().unwrap_or("static page failed").trim();
+        return Err(format!("static {id}.py: {detail}"));
+    }
+    Ok(output.stdout)
+}
 
 fn switch_current(data: &Path, gen: &str) -> Result<(), String> {
     let tmp = data.join(".current.tmp");

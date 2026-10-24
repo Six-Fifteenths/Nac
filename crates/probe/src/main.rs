@@ -38,6 +38,16 @@ fn main() {
     let result: Result<(), String> = match cmd.as_str() {
         "manifest" => call(&addr, ClientMsg { session, request: Request::Manifest })
             .and_then(|msgs| print_msgs(msgs, 0, false)),
+        "hello" => call(&addr, ClientMsg { session, request: Request::Hello })
+            .and_then(|msgs| print_msgs(msgs, 0, false)),
+        "health" => call(&addr, ClientMsg { session, request: Request::Manifest })
+            .and_then(|msgs| match msgs.first() {
+                Some(ServerMsg::Manifest { entries, .. }) if !entries.is_empty() => {
+                    println!("ok {}", entries.len());
+                    Ok(())
+                }
+                _ => Err("empty manifest".into()),
+            }),
         "page" => {
             let id = parse_id(&args);
             fetch(&addr, session, id, false)
@@ -45,6 +55,10 @@ fn main() {
         "image" => {
             let id = parse_id(&args);
             fetch(&addr, session, id, true)
+        }
+        "image-stream" => {
+            let id = parse_id(&args);
+            fetch_stream(&addr, session, id)
         }
         "submit" => {
             let id = parse_id(&args);
@@ -142,6 +156,34 @@ fn fetch(addr: &str, session: [u8; SESSION_LEN], id: u16, image: bool) -> Result
     Ok(())
 }
 
+fn fetch_stream(addr: &str, session: [u8; SESSION_LEN], id: u16) -> Result<(), String> {
+    let mut stream = TcpStream::connect(addr).map_err(|e| e.to_string())?;
+    let msg = ClientMsg {
+        session,
+        request: Request::ImageStream(id, 0),
+    };
+    stream.write_all(&encode_client(&msg)).map_err(|e| e.to_string())?;
+    let mut body = Vec::new();
+    loop {
+        let frame = read_frame(&mut stream)?;
+        match decode_server(&frame).ok_or_else(|| "bad response frame".to_string())? {
+            ServerMsg::Image { total, data, .. } => {
+                body.extend_from_slice(&data);
+                if body.len() >= total as usize || data.is_empty() {
+                    break;
+                }
+            }
+            ServerMsg::Empty => {
+                println!("EMPTY");
+                return Ok(());
+            }
+            other => return Err(format!("unexpected: {other:?}")),
+        }
+    }
+    println!("image {id}: {} bytes", body.len());
+    Ok(())
+}
+
 fn print_msgs(msgs: Vec<ServerMsg>, id: u16, _image: bool) -> Result<(), String> {
     for m in msgs {
         match m {
@@ -161,6 +203,7 @@ fn print_msgs(msgs: Vec<ServerMsg>, id: u16, _image: bool) -> Result<(), String>
                 print!("{}", String::from_utf8_lossy(&data));
             }
             ServerMsg::Image { total, .. } => println!("image {id}: {total} bytes"),
+            ServerMsg::Hello { version } => println!("version {version}"),
             ServerMsg::Empty => println!("EMPTY"),
         }
     }

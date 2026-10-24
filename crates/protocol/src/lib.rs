@@ -7,6 +7,7 @@
 //! No magic bytes, no version field: both are fingerprints.
 //! Every decoder returns `None` on anything malformed, and never panics.
 
+pub const VERSION: u16 = 2;
 pub const MAX_FRAME: usize = 32768;
 pub const CHUNK: usize = 16384;
 pub const SESSION_LEN: usize = 16;
@@ -17,6 +18,7 @@ const T_MANIFEST: u8 = 0x81;
 const T_PAGE: u8 = 0x82;
 const T_IMAGE: u8 = 0x83;
 const T_EMPTY: u8 = 0x84;
+const T_HELLO: u8 = 0x85;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ManifestEntry {
@@ -28,9 +30,11 @@ pub struct ManifestEntry {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Request {
+    Hello,
     Manifest,
     Page(u16),
     Image(u16, u32),
+    ImageStream(u16, u32),
     Submit(u16, Vec<(String, String)>),
 }
 
@@ -42,6 +46,7 @@ pub struct ClientMsg {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ServerMsg {
+    Hello { version: u16 },
     Manifest {
         session: [u8; SESSION_LEN],
         entries: Vec<ManifestEntry>,
@@ -77,6 +82,10 @@ pub fn encode_client(msg: &ClientMsg) -> Vec<u8> {
     p.extend_from_slice(&msg.session);
 
     match &msg.request {
+        Request::Hello => {
+            p.push(3);
+            frame(T_REQ, &p)
+        }
         Request::Manifest => {
             p.push(0);
             frame(T_REQ, &p)
@@ -88,6 +97,12 @@ pub fn encode_client(msg: &ClientMsg) -> Vec<u8> {
         }
         Request::Image(id, offset) => {
             p.push(2);
+            p.extend_from_slice(&id.to_be_bytes());
+            p.extend_from_slice(&offset.to_be_bytes());
+            frame(T_REQ, &p)
+        }
+        Request::ImageStream(id, offset) => {
+            p.push(4);
             p.extend_from_slice(&id.to_be_bytes());
             p.extend_from_slice(&offset.to_be_bytes());
             frame(T_REQ, &p)
@@ -111,6 +126,7 @@ pub fn encode_client(msg: &ClientMsg) -> Vec<u8> {
 
 pub fn encode_server(msg: &ServerMsg) -> Vec<u8> {
     match msg {
+        ServerMsg::Hello { version } => frame(T_HELLO, &version.to_be_bytes()),
         ServerMsg::Manifest { session, entries } => {
             let mut p = Vec::with_capacity(32 + entries.len() * 32);
             p.extend_from_slice(session);
@@ -226,6 +242,12 @@ pub fn decode_client(buf: &[u8]) -> Option<ClientMsg> {
 
     let request = match t {
         T_REQ => match r.u8()? {
+            3 => {
+                if !r.done() {
+                    return None;
+                }
+                Request::Hello
+            }
             0 => {
                 if !r.done() {
                     return None;
@@ -246,6 +268,14 @@ pub fn decode_client(buf: &[u8]) -> Option<ClientMsg> {
                     return None;
                 }
                 Request::Image(id, off)
+            }
+            4 => {
+                let id = r.u16()?;
+                let off = r.u32()?;
+                if !r.done() {
+                    return None;
+                }
+                Request::ImageStream(id, off)
             }
             _ => return None,
         },
@@ -276,6 +306,13 @@ pub fn decode_server(buf: &[u8]) -> Option<ServerMsg> {
     let mut r = Reader::new(p);
 
     match t {
+        T_HELLO => {
+            let version = r.u16()?;
+            if !r.done() {
+                return None;
+            }
+            Some(ServerMsg::Hello { version })
+        }
         T_MANIFEST => {
             let session: [u8; SESSION_LEN] = r.bytes(SESSION_LEN)?.try_into().ok()?;
             let n = r.u16()? as usize;
@@ -353,9 +390,11 @@ mod tests {
     #[test]
     fn client_roundtrip() {
         let cases = vec![
+            Request::Hello,
             Request::Manifest,
             Request::Page(7),
             Request::Image(3, 4096),
+            Request::ImageStream(3, 0),
             Request::Submit(
                 7,
                 vec![
@@ -392,6 +431,7 @@ mod tests {
             },
         ];
         let msgs = vec![
+            ServerMsg::Hello { version: VERSION },
             ServerMsg::Manifest {
                 session: s(),
                 entries,

@@ -37,7 +37,7 @@ done
     echo "公开站与运营台必须是两个不同的用户" >&2
     exit 1
 }
-for bin in contentd publish; do
+for bin in contentd publish probe; do
     [ -x "$FROM/$bin" ] || { echo "找不到 $FROM/$bin，先 cargo build --release" >&2; exit 1; }
 done
 [ -f site/1.py ] || { echo "请在仓库根目录运行" >&2; exit 1; }
@@ -75,6 +75,7 @@ fi
 echo "== 二进制"
 install -m 0755 -o root -g root "$FROM/contentd" "$DEST/bin/contentd"
 install -m 0755 -o root -g root "$FROM/publish" "$DEST/bin/publish"
+install -m 0755 -o root -g root "$FROM/probe" "$DEST/bin/probe"
 
 echo "== 页面源码"
 if [ "$KEEP_SITE" = 1 ] && [ -d "$DEST/site" ] && [ -d "$DEST/admin/site" ]; then
@@ -117,8 +118,8 @@ chown -R "$CONSOLE_USER:$CONSOLE_USER" "$DEST/admin"
 chmod -R u=rwX,g=,o= "$DEST/admin"
 chown -R root:"$SHARE_GROUP" "$DEST/site"
 chmod -R u=rwX,g=rX,o=rX "$DEST/site"
-chown root:root "$DEST/bin/contentd" "$DEST/bin/publish"
-chmod 0755 "$DEST/bin/contentd" "$DEST/bin/publish"
+chown root:root "$DEST/bin/contentd" "$DEST/bin/publish" "$DEST/bin/probe"
+chmod 0755 "$DEST/bin/contentd" "$DEST/bin/publish" "$DEST/bin/probe"
 
 echo "== systemd"
 for unit in nac-contentd nac-console; do
@@ -140,6 +141,14 @@ for unit in nac-contentd nac-console; do
     UNITS="$UNITS $unit"
 done
 
+# 健康检查与每日备份（timer 由下面 enable）
+for unit in nac-health nac-backup; do
+    sed -e "s#/srv/nac#$DEST#g" "deploy/$unit.service" > "/etc/systemd/system/$unit.service"
+    sed -e "s#/srv/nac#$DEST#g" "deploy/$unit.timer" > "/etc/systemd/system/$unit.timer"
+done
+sed -i "s#^User=nac-public#User=$PUBLIC_USER#" /etc/systemd/system/nac-health.service
+install -m 0755 -o root -g root deploy/nac-backup.sh /usr/local/sbin/nac-backup
+
 # 公开站点的绑定地址是本脚本唯一的开关：绑 0.0.0.0 就等于把 IP 交给访客。
 if [ "$BIND" != "127.0.0.1" ]; then
     sed -i "s#--bind 127.0.0.1#--bind $BIND#" /etc/systemd/system/nac-contentd.service
@@ -157,6 +166,12 @@ systemctl restart $UNITS || {
     echo "   systemctl status nac-contentd nac-console --no-pager -l" >&2
     echo "   journalctl -u nac-contentd -n 30 --no-pager" >&2
     echo "   journalctl -u nac-console -n 30 --no-pager" >&2
+    exit 1
+}
+
+systemctl enable --now nac-health.timer nac-backup.timer || {
+    echo "!! 健康检查/备份 timer 启动失败" >&2
+    echo "   systemctl status nac-health.timer nac-backup.timer --no-pager -l" >&2
     exit 1
 }
 

@@ -15,7 +15,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use protocol::{
     decode_client, encode_server, ManifestEntry, Request, ServerMsg, CHUNK, MAX_FRAME,
-    SESSION_LEN,
+    SESSION_LEN, VERSION,
 };
 
 const PY_TIMEOUT: Duration = Duration::from_secs(2);
@@ -237,6 +237,11 @@ fn handle(mut stream: TcpStream, state: Arc<State>) -> std::io::Result<()> {
         return send(&mut stream, &[ServerMsg::Empty]);
     };
 
+    if matches!(msg.request, Request::Hello) {
+        log_line(&state, None, "hello", started, 2, None);
+        return send(&mut stream, &[ServerMsg::Hello { version: VERSION }]);
+    }
+
     let (manifest_gen, manifest) = match state.manifest() {
         Some(v) => v,
         None => {
@@ -250,6 +255,7 @@ fn handle(mut stream: TcpStream, state: Arc<State>) -> std::io::Result<()> {
     let sess = hex8(&session.id);
 
     let (responses, page, result) = match &msg.request {
+        Request::Hello => (vec![ServerMsg::Hello { version: VERSION }], None, "hello".to_string()),
         Request::Manifest => {
             let mut entries: Vec<ManifestEntry> = manifest
                 .pages
@@ -279,6 +285,13 @@ fn handle(mut stream: TcpStream, state: Arc<State>) -> std::io::Result<()> {
             },
             None => (vec![ServerMsg::Empty], Some(*id), "image-unknown".to_string()),
         },
+        Request::ImageStream(id, offset) => match manifest.images.iter().find(|i| i.id == *id) {
+            Some(def) => match fs::read(gen_dir.join(&def.file)) {
+                Ok(bytes) => (image_frames(*id, &bytes, *offset), Some(*id), "image-stream".to_string()),
+                Err(_) => (vec![ServerMsg::Empty], Some(*id), "image-missing".to_string()),
+            },
+            None => (vec![ServerMsg::Empty], Some(*id), "image-unknown".to_string()),
+        },
         Request::Page(id) => {
             let out = serve_page(&state, &manifest, &gen_dir, &session, *id, &[], 0);
             let result = outcome(&out);
@@ -296,6 +309,7 @@ fn handle(mut stream: TcpStream, state: Arc<State>) -> std::io::Result<()> {
         .map(|m| match m {
             ServerMsg::Page { data, .. } | ServerMsg::Image { data, .. } => data.len(),
             ServerMsg::Empty => 16,
+            ServerMsg::Hello { .. } => 2,
             _ => 0,
         })
         .sum();
@@ -408,6 +422,31 @@ fn image_frame(id: u16, bytes: &[u8], offset: u32) -> ServerMsg {
         offset: start as u32,
         data: bytes[start..end].to_vec(),
     }
+}
+
+fn image_frames(id: u16, bytes: &[u8], offset: u32) -> Vec<ServerMsg> {
+    let total = bytes.len() as u32;
+    let mut start = (offset as usize).min(bytes.len());
+    let mut out = Vec::new();
+    while start < bytes.len() {
+        let end = (start + CHUNK).min(bytes.len());
+        out.push(ServerMsg::Image {
+            id,
+            total,
+            offset: start as u32,
+            data: bytes[start..end].to_vec(),
+        });
+        start = end;
+    }
+    if out.is_empty() {
+        out.push(ServerMsg::Image {
+            id,
+            total,
+            offset: start as u32,
+            data: Vec::new(),
+        });
+    }
+    out
 }
 
 fn send(stream: &mut TcpStream, msgs: &[ServerMsg]) -> std::io::Result<()> {

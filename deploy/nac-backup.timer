@@ -1,0 +1,10 @@
+[Unit]
+Description=nac data backup daily
+
+[Timer]
+OnCalendar=*-*-* 04:45:00
+Persistent=true
+RandomizedDelaySec=5min
+
+[Install]
+WantedBy=timers.target

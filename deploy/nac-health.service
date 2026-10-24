@@ -1,0 +1,14 @@
+[Unit]
+Description=nac health probe
+After=network.target
+
+[Service]
+Type=oneshot
+User=nac-public
+ExecStart=/srv/nac/bin/probe --addr 127.0.0.1:7000 health
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+NoNewPrivileges=yes
+CapabilityBoundingSet=

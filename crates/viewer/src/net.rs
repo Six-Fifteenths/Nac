@@ -25,7 +25,7 @@ impl Client {
         }
     }
 
-    fn call(&mut self, request: Request) -> Result<ServerMsg, ()> {
+    fn open(&self, request: Request) -> Result<TcpStream, ()> {
         let mut stream = TcpStream::connect(&self.addr).map_err(|_| ())?;
         stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
         stream.set_write_timeout(Some(Duration::from_secs(5))).ok();
@@ -35,9 +35,20 @@ impl Client {
             request,
         };
         stream.write_all(&encode_client(&msg)).map_err(|_| ())?;
+        Ok(stream)
+    }
 
+    fn call(&mut self, request: Request) -> Result<ServerMsg, ()> {
+        let mut stream = self.open(request)?;
         let frame = read_frame(&mut stream)?;
         decode_server(&frame).ok_or(())
+    }
+
+    pub fn hello(&mut self) -> Result<u16, ()> {
+        match self.call(Request::Hello)? {
+            ServerMsg::Hello { version } => Ok(version),
+            _ => Err(()),
+        }
     }
 
     pub fn manifest(&mut self) -> Result<Vec<Entry>, ()> {
@@ -76,10 +87,34 @@ impl Client {
     }
 
     pub fn image(&mut self, id: u16) -> Result<Vec<u8>, ()> {
+        if let Ok(data) = self.image_stream(id) {
+            return Ok(data);
+        }
         let mut out = Vec::new();
         loop {
             let offset = out.len() as u32;
             match self.call(Request::Image(id, offset))? {
+                ServerMsg::Image { total, data, .. } => {
+                    if data.is_empty() {
+                        break;
+                    }
+                    out.extend_from_slice(&data);
+                    if out.len() >= total as usize {
+                        break;
+                    }
+                }
+                _ => return Err(()),
+            }
+        }
+        Ok(out)
+    }
+
+    pub fn image_stream(&mut self, id: u16) -> Result<Vec<u8>, ()> {
+        let mut stream = self.open(Request::ImageStream(id, 0))?;
+        let mut out = Vec::new();
+        loop {
+            let frame = read_frame(&mut stream)?;
+            match decode_server(&frame).ok_or(())? {
                 ServerMsg::Image { total, data, .. } => {
                     if data.is_empty() {
                         break;
