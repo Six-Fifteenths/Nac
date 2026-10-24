@@ -120,4 +120,4 @@ echo
 echo "接下来："
 echo "  1) 本机隧道：ssh -N -L 7001:127.0.0.1:7001 用户@服务器  → viewer 地址栏 console/1"
 echo "  2) 若要让外人访问公开站点，先决定传输层；临时直连就把 nac-contentd 改成 --bind 0.0.0.0 并开防火墙端口"
-echo "  3) 访问日志：$DEST/access.jsonl（用 logrotate 轮转）"
+echo "  3) 访问日志：$DEST/data/access.jsonl（用 logrotate 轮转）"

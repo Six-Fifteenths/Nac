@@ -15,7 +15,7 @@
 ├─ data/                     公开站点：current / gen/ / state/ / appdata/
 ├─ admin/data/               运营台自己的代与会话（与公开站点隔离）
 ├─ archive/                  原图归档（只有用 --archive 时才有）
-└─ access.jsonl              访问日志（只有给 --log 时才写）
+└─ data/access.jsonl         访问日志（只有给 --log 时才写）
 ```
 
 `data/gen/` 与 `data/state/` 可再生；`site/`、`admin/site/`、`data/appdata/`、`archive/` 要备份。
@@ -73,7 +73,7 @@ sudo systemctl enable --now nac-contentd nac-console
 
 | unit | 端口 | 绑定 | 用途 |
 |---|---|---|---|
-| `nac-contentd.service` | 7000 | `127.0.0.1` | 公开站点，带 `--log` 与 `--session-ttl-hours 168` |
+| `nac-contentd.service` | 7000 | `127.0.0.1` | 公开站点，带 `--log data/access.jsonl` 与 `--session-ttl-hours 168` |
 | `nac-console.service` | 7001 | `127.0.0.1` | 运营台，额外传 `NAC_ROOT`、`NAC_LOG` |
 
 两个 unit 都带 `Restart=always`、`NoNewPrivileges=yes`、`ProtectSystem=full`、
@@ -161,10 +161,27 @@ console MTI3LjAuMC4xOjcwMDE=
 | `CapabilityBoundingSet=` / `AmbientCapabilities=` | 丢掉全部 capability |
 | `RestrictSUIDSGID=yes` | 不能创建 setuid/setgid 文件 |
 | `RestrictNamespaces=yes` / `LockPersonality=yes` | 关掉常见逃逸面 |
-| `ProtectSystem=strict` + `ReadWritePaths=…` | 整个文件系统只读，只有 data 目录可写 → 页面脚本改不动 `bin/`、`site/`、`/etc` |
+| `ProtectSystem=strict` | 整个文件系统只读，只有下面列出的目录可写 |
 | `ProtectHome=yes` / `PrivateTmp=yes` / `PrivateDevices=yes` | 看不到家目录，私有 `/tmp`，无设备节点 |
 | `ProtectKernelTunables/Modules/ControlGroups=yes` | 内核与 cgroup 不可写 |
 | `UMask=0077` | 会话文件只有属主可读 |
+
+**两个服务各自能碰的目录**（这是"一次部署只给一个局部文件夹"的具体落地）：
+
+| | `nac-contentd`（公开，7000） | `nac-console`（运营台，7001） |
+|---|---|---|
+| 可写 | `data/`（含 `data/access.jsonl`）、`archive/` | `admin/data/`、`data/`、`archive/` |
+| 只读 | `bin/`、`site/` | `bin/`、`site/`、`admin/site/` |
+| 完全不可见 | **`admin/`**（`InaccessiblePaths`） | — |
+
+几点值得注意：
+
+- 公开站点的页面脚本**读不到**运营台的源码与数据（不是"不能写"，是看不到）。
+- 两边都**写不了** `site/` 与 `admin/site/`：页面脚本改不动内容源文件。改内容走 `git pull` 或你自己 ssh 编辑，然后 `publish`。
+- `data/access.jsonl` 放在 `data/` 里而不是 `/srv/nac/` 根下，就是为了让可写范围收敛成一个目录，不必为单个文件开例外。
+- 运营台必须能写 `data/`，否则"发布"按钮失效。它因此比公开站点多一份权限——这是**运营台只监听回环**的原因。
+
+从旧版本升级上来时，`/srv/nac/access.jsonl` 会留在原地不再写入；确认新日志正常后可以删掉它。
 
 这些指令都需要 systemd 232+（CentOS 8 / Debian 10 / Ubuntu 20.04 起）。更老的系统上 unit
 会加载失败，`install.sh` 会检测版本并提示。`ProtectHostname` / `ProtectClock` /
@@ -179,7 +196,7 @@ console MTI3LjAuMC4xOjcwMDE=
 3. `journalctl -u nac-contentd -n 20` → 没有反复重启、没有 `bind` 失败
 4. `cd /srv/nac && bin/publish --site site --data data` → `published <代> (N pages, M images)`
    （注意：以 `nac` 身份跑，`sudo -u nac ...`，否则产物属主会变成 root）
-5. `tail -f /srv/nac/access.jsonl` → 取一次页，应出现一行 JSON
+5. `tail -f /srv/nac/data/access.jsonl` → 取一次页，应出现一行 JSON
 6. firewall：只留 SSH。传输层未定之前不开 7000
 
 自己电脑：
@@ -199,7 +216,7 @@ console MTI3LjAuMC4xOjcwMDE=
 | 改完立刻生效吗 | 是。`contentd` 每次请求都重读 `data/current`，不用重启 |
 | 回滚 | 把 `data/current` 里的代名改成旧代（`data/gen/` 保留最近 5 代） |
 | 改运营台 | 改 `admin/site/*.py` → `publish --site admin/site --data admin/data` |
-| 看实时访问 | 运营台第 5 页，或 `tail -f access.jsonl` |
+| 看实时访问 | 运营台第 5 页，或 `tail -f data/access.jsonl` |
 | 清空所有数据 | 停服务 → 删 `data/appdata/` → 起服务 |
 | 重启 | `sudo systemctl restart nac-contentd` |
 
@@ -210,7 +227,7 @@ console MTI3LjAuMC4xOjcwMDE=
 **访问日志**（`--log`）没有内建轮转，加一个 logrotate：
 
 ```
-/srv/nac/access.jsonl {
+/srv/nac/data/access.jsonl {
     weekly
     rotate 8
     compress

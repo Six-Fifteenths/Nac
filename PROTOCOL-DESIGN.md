@@ -263,7 +263,7 @@ publish --site site --data data [--archive archive]
 ### 5.3 contentd
 
 ```
-contentd --data data --port 7000 --bind 127.0.0.1 [--log access.jsonl] [--env K=V ...]
+contentd --data data --port 7000 --bind 127.0.0.1 [--log data/access.jsonl] [--env K=V ...]
 ```
 
 - 默认只监听 `127.0.0.1`；对外暴露时才用 `--bind 0.0.0.0` 或指定网卡地址。
@@ -377,7 +377,7 @@ Host nac
 ├─ admin/site/           运营台页面
 ├─ admin/data/           运营台的代与会话
 ├─ data/                 公开站点的代与数据（contentd 唯一写入的地方）
-├─ access.jsonl          访问日志（--log，只有给了才写）
+├─ data/access.jsonl     访问日志（--log，只有给了才写）
 └─ nac.routes            可选：服务器侧自己跑客户端时才需要
 ```
 
@@ -421,7 +421,7 @@ sudo systemctl daemon-reload && sudo systemctl enable --now nac-contentd nac-con
 3. `journalctl -u nac-contentd -n 20` → 没有反复重启、没有 `bind` 失败
 4. `cd /srv/nac && bin/publish --site site --data data` 手动跑一次 → `published <代> (N pages, M images)`
 5. `curl` 之类打不到协议层是正常的；用 `probe` 或客户端验证
-6. 访问日志：`tail -f /srv/nac/access.jsonl`，取一页应出现一行 JSON
+6. 访问日志：`tail -f /srv/nac/data/access.jsonl`，取一页应出现一行 JSON
 
 自己电脑：
 

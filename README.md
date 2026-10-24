@@ -188,7 +188,7 @@ publish failed: data 目录 /srv/nac/data 在 site 目录 /srv/nac 里面：上�
 
 ```bash
 ./target/release/contentd --data data --port 7000 --bind 127.0.0.1 \
-    [--log access.jsonl] [--session-ttl-hours 168] [--env KEY=VALUE ...]
+    [--log data/access.jsonl] [--session-ttl-hours 168] [--env KEY=VALUE ...]
 ```
 
 | 参数 | 默认 | 说明 |
@@ -264,7 +264,7 @@ NAC_EMBED_ROUTES='*home MTI3LjAuMC4xOjcwMDA=' cargo build --release -p viewer
 ```bash
 ./target/release/publish --site admin/site --data admin/data
 ./target/release/contentd --data admin/data --port 7001 --bind 127.0.0.1 \
-    --env NAC_ROOT=$PWD --env NAC_LOG=$PWD/access.jsonl
+    --env NAC_ROOT=$PWD --env NAC_LOG=$PWD/data/access.jsonl
 ```
 
 然后客户端地址栏输 `console/1`（`nac.routes` 里要有 `console` 这一行）。

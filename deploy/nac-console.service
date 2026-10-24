@@ -8,37 +8,37 @@ User=nac
 Group=nac
 WorkingDirectory=/srv/nac
 # 运营台永远只监听 127.0.0.1；远程访问用 ssh -L，不在防火墙上开口。
-# 它的页面会读写 site/ 与 data/、还会调 publish，所以可写路径和公开站点一样。
+# 它要能写公开站点的 data/ 才能在页面里点"发布"，所以可写范围比公开站点多一份。
 ExecStart=/srv/nac/bin/contentd \
     --data /srv/nac/admin/data \
     --port 7001 \
     --bind 127.0.0.1 \
     --env NAC_ROOT=/srv/nac \
-    --env NAC_LOG=/srv/nac/access.jsonl
+    --env NAC_LOG=/srv/nac/data/access.jsonl
 Restart=always
 RestartSec=2
-# --- 沙箱：页面脚本是本服务启动的，这一节决定"页面代码能不能拿到更多权限" ---
-# 这里的指令都在 systemd 232+ 可用（CentOS 8 / Debian 10 / Ubuntu 20.04 起）。
+
 NoNewPrivileges=yes
 CapabilityBoundingSet=
 AmbientCapabilities=
 RestrictSUIDSGID=yes
 LockPersonality=yes
 RestrictNamespaces=yes
-# 整个文件系统只读，只有下面几处可写；页面脚本改不动 bin/ 与 site/。
+
 ProtectSystem=strict
-ReadWritePaths=/srv/nac/data /srv/nac/admin/data -/srv/nac/archive
+# 自己的 data/ + 公开站点的 data/（发布用）+ archive/
+ReadWritePaths=/srv/nac/admin/data /srv/nac/data -/srv/nac/archive
 ProtectHome=yes
 PrivateTmp=yes
 PrivateDevices=yes
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
 ProtectControlGroups=yes
-# 会话文件默认只有属主可读。
 UMask=0077
 # 更严的几条需要较新 systemd（242 / 245 / 247），确认版本后再放开：
 # ProtectHostname=yes
 # ProtectClock=yes
 # ProtectProc=invisible
+
 [Install]
 WantedBy=multi-user.target
