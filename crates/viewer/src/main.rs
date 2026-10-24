@@ -520,7 +520,13 @@ impl Viewer {
         self.error.clear();
         self.failed = false;
         match self.page_id {
-            Some(id) => self.load(id),
+            Some(id) => {
+                // Refresh the manifest first: static pages are cached by its
+                // hash, so F5 must see a republish before reusing the cache.
+                self.target = Some(id);
+                self.loading = true;
+                self.fetcher.manifest();
+            }
             None => self.bootstrap(),
         }
     }
