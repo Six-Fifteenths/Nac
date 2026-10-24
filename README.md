@@ -30,7 +30,7 @@ cp nac.routes.example nac.routes
 ./target/release/viewer
 ```
 
-窗口里应该看到《白塔》，地址栏是 `nac.local/`。详细步骤见运营指南。
+窗口里应该看到“一座不经过 HTTP 的小站”，地址栏是 `nac.local/`。详细步骤见运营指南。
 
 `nac.routes` 每行第三列说明这条连接怎么加密：
 

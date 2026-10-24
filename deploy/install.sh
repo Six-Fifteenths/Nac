@@ -40,7 +40,7 @@ done
 for bin in contentd publish probe; do
     [ -x "$FROM/$bin" ] || { echo "找不到 $FROM/$bin，先 cargo build --release" >&2; exit 1; }
 done
-[ -f site/1.py ] || { echo "请在仓库根目录运行" >&2; exit 1; }
+[ -f site/index.py ] || { echo "请在仓库根目录运行" >&2; exit 1; }
 command -v python3 >/dev/null || { echo "服务器上需要 python3" >&2; exit 1; }
 command -v openssl >/dev/null || { echo "服务器上需要 openssl" >&2; exit 1; }
 
