@@ -7,3 +7,7 @@ edition = "2021"
 protocol = { path = "../protocol" }
 eframe = "0.37"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+obfstr = "0.4"
+
+[features]
+windows_gui = []

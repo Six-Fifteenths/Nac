@@ -1,8 +1,10 @@
 //! Site directory: maps a user-visible name to a server endpoint.
 //!
 //! Users address pages as `/12`; they never see or type an endpoint. The
-//! endpoint lives in this file, outside the binary, and is stored base64
-//! encoded so the file does not read as a plain address at a glance.
+//! endpoint normally lives in a file outside the binary, and is stored base64
+//! encoded so the file does not read as a plain address at a glance. It can
+//! also be embedded at build time with `NAC_EMBED_ROUTES` for standalone
+//! distribution.
 //!
 //! That is all it is: a glance-level disguise. A client that speaks TCP
 //! directly to a server must know where that server is, so anything stronger
@@ -13,6 +15,12 @@ use std::path::{Path, PathBuf};
 pub const FILE_NAME: &str = "nac.routes";
 pub const EXAMPLE_NAME: &str = "nac.routes.example";
 pub const DEFAULT_PORT: &str = "7000";
+
+include!(concat!(env!("OUT_DIR"), "/embedded.rs"));
+
+pub fn is_embedded() -> bool {
+    has_embedded()
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Site {
@@ -68,6 +76,16 @@ impl Routes {
                 endpoint: with_default_port(endpoint.to_string()),
                 default: true,
             }],
+        }
+    }
+
+    pub fn embedded() -> Option<Self> {
+        let text = embedded_text()?;
+        let routes = Self::parse(&text);
+        if routes.is_empty() {
+            None
+        } else {
+            Some(routes)
         }
     }
 

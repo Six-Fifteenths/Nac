@@ -1,3 +1,8 @@
+#![cfg_attr(
+    all(target_os = "windows", feature = "windows_gui"),
+    windows_subsystem = "windows"
+)]
+
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -70,13 +75,18 @@ fn main() -> eframe::Result<()> {
 
     let routes = build_routes(routes_path.as_deref(), addr);
     if list_sites {
+        let embedded = routes::is_embedded();
         for site in &routes.sites {
-            println!(
-                "{}{}\t{}",
-                if site.default { "*" } else { " " },
-                site.name,
-                site.endpoint
-            );
+            if embedded {
+                println!("{}{}", if site.default { "*" } else { " " }, site.name);
+            } else {
+                println!(
+                    "{}{}\t{}",
+                    if site.default { "*" } else { " " },
+                    site.name,
+                    site.endpoint
+                );
+            }
         }
         return Ok(());
     }
@@ -112,11 +122,14 @@ fn main() -> eframe::Result<()> {
     )
 }
 
-/// An explicit `--addr` wins (operator escape hatch); otherwise the shipped
-/// directory decides. No built-in fallback endpoint: the binary must not carry one.
+/// An explicit `--addr` wins (operator escape hatch); then an endpoint embedded
+/// at build time via `NAC_EMBED_ROUTES`; otherwise the shipped directory decides.
 fn build_routes(explicit: Option<&str>, addr: Option<String>) -> routes::Routes {
     if let Some(fallback) = addr {
         return routes::Routes::single("dev", &fallback);
+    }
+    if let Some(routes) = routes::Routes::embedded() {
+        return routes;
     }
     if let Some(path) = routes::Routes::locate(explicit) {
         if let Some(routes) = routes::Routes::load(&path) {

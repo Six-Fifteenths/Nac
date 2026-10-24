@@ -240,6 +240,16 @@ console MTI3LjAuMC4xOjcwMDE=
 查找顺序：`--routes <路径>` → 环境变量 `NAC_ROUTES` → **可执行文件同目录** → 当前目录 → 同名 `.example`。
 带 `*` 的是默认站点。发布新内容不用动这个文件；换服务器/换端口才需要改并重新分发。
 
+**独立分发（可选）**：编译时用 `NAC_EMBED_ROUTES` 把站点目录写进 viewer，运行时不需要 `nac.routes`：
+
+```bash
+NAC_EMBED_ROUTES='*home MTI3LjAuMC4xOjcwMDA=' cargo build --release -p viewer
+# Windows 不弹控制台窗口：再加 --features windows_gui
+```
+
+`NAC_EMBED_ROUTES` 与 `nac.routes` 格式相同，token 用 `viewer --routes-encode 主机:端口` 生成；`--addr` 仍可覆盖。嵌入后 `--routes-check` 只显示站点名，不显示端点。
+这只是 `obfstr` 字符串混淆，**不是保密**：进程内存、调试器和网络抓包仍能取得端点，直连也必然暴露服务器 IP。要隐藏源站需要中继或 Tor。
+
 **快捷键**：`Ctrl+L` 定位地址栏、`Esc` / `Alt+←` 后退、`Alt+→` 前进、`F5` 或 `R` 刷新（焦点不在输入框时）、回车提交表单。
 
 **运算符与状态**：取页在后台线程进行，跨网也不会卡住窗口；底部状态栏会显示"正在取第 N 页…"。
@@ -335,7 +345,7 @@ systemd unit、`enable --now`，最后自检（`is-active`、`ss -ltnp`、用一
 **没做到（重要）**
 
 - **服务器 IP 仍会暴露给任何抓包或看文件的人**。客户端要直连就必须知道地址，
-  `nac.routes` 只是把它变得不显眼。真正的隐藏属于传输层（Tor / 自建中继），**当前未实现**。
+  `nac.routes` 与编译期 `NAC_EMBED_ROUTES` 只是把它变得不显眼。真正的隐藏属于传输层（Tor / 自建中继），**当前未实现**。
 - 没有账号与权限：任何能连上端口的人都能读到全部页面、提交任意表单。
 - 页面脚本以服务进程身份运行，拥有服务器上的读写能力。**只跑自己写的页面**；
   一旦允许别人提交 Python，那就是远程代码执行。
