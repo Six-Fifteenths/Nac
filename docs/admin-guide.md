@@ -70,28 +70,58 @@ cargo build --release --target x86_64-pc-windows-gnu -p viewer --features window
 
 ## 5. 运营台
 
-运营台不监听公网，用 SSH 隧道：
+运营台不监听公网。它有两种访问方式，取决于你用哪个构建。
+
+### 5.1 分发版（给普通读者）
+
+分发版的构建**不包含任何 ssh 代码**：
 
 ```bash
-ssh -N -L 17001:127.0.0.1:7001 root@服务器
+NAC_EMBED_ROUTES='*home <端点base64>' NAC_TLS_PIN=... \
+  cargo build --release -p viewer --features windows_gui
 ```
 
-隧道这一端是明文，所以在 `nac.routes` 里给运营台站点标上 `plain`：
+它只认识公网站点，双击即用，没有终端、没有隧道、也没有可以撬出命令执行的东西。
+
+### 5.2 管理员版（给你自己）
+
+多一个 `admin` 特性，它才允许客户端自己拉起 `ssh -N -L`：
+
+```bash
+# 日常使用：GUI 子系统，双击运行，不会出现任何终端窗口
+cargo build --release -p viewer --features admin,windows_gui
+
+# 排障用：控制台子系统，会带一个终端窗口，但 --routes-check / --selftest 有输出
+cargo build --release -p viewer --features admin
+
+# 分发版：没有任何 ssh 代码
+cargo build --release -p viewer --features windows_gui
+```
+
+`nac.routes` 里给运营台那一行加 `ssh=用户@服务器`：
 
 ```
 *home   MTk5LjcuMTQwLjIxNzo3MDAw   tls
-console MTI3LjAuMC4xOjE3MDAx       plain
+console MTI3LjAuMC4xOjcwMDE=       plain ssh=root@199.7.140.217
 ```
 
-之后用同一个客户端打开即可，**不需要** `--plaintext`，也不需要第二个构建：
+于是**不需要终端**：启动时（或地址栏切到 `console.nac.local/` 时）客户端自己执行
 
-```powershell
-.\NacViewer.exe --site console
+```
+ssh -N -o BatchMode=yes -o ExitOnForwardFailure=yes -L 7001:127.0.0.1:7001 root@199.7.140.217
 ```
 
-（`--plaintext` 仍然存在，是"整个进程都不加密"的应急开关；正常情况用站点标记就够了。）
+等到本机 7001 可连再发请求；退出时把子进程杀掉。若你已经有自己的 `ssh -L` 在跑，它会发现端口已通，直接复用、不另开。
+在 Windows 上子进程用 `CREATE_NO_WINDOW` 启动，所以**不会闪出黑窗口**——即使 viewer 自己是 GUI 子系统。
 
-地址栏会显示 `console.nac.local/`；直接输入路径即可：
+前提与限制：
+
+- 本机要有 OpenSSH 客户端（Windows 10+ 自带）；密钥必须免密（有口令就先开 `ssh-agent`）。
+- `-o BatchMode=yes`：不会弹口令提示，失败会直接在窗口里说明原因（包括 ssh 的报错行）。
+- 隧道仍是 SSH：身份验证、加密、主机指纹都由 ssh 负责，客户端只是替你敲了那行命令。
+- `--plaintext` 仍然存在，但正常不需要了：加密方式跟着站点走。
+
+地址栏显示 `console.nac.local/`，直接输入路径即可：
 
 | 路径 | 页面 |
 |---|---|
@@ -154,7 +184,7 @@ console MTI3LjAuMC4xOjE3MDAx       plain
 | 现象 | 先看 |
 |---|---|
 | 客户端连不上 | `ss -ltnp \| grep 7000`、`journalctl -u nac-contentd`、pin 是否匹配 |
-| 运营台打不开 | 隧道是否在；`nac.routes` 里 console 是否标了 `plain`；7001 是否监听 |
+| 运营台打不开 | 用的是不是 admin 构建；`nac.routes` 里是否写了 `ssh=用户@服务器`；本机 ssh 能否免密（有口令先开 ssh-agent） |
 | 发布按钮失败 | 运营台能否写 `data/`；`journalctl -u nac-console` |
 | 页面空白 | `journalctl -u nac-contentd` 里的 Python 报错、页面是否超时/超 16KB |
 | 日志不增长 | unit 里 `--log` 路径；`data/` 是否可写；logrotate 配置 |

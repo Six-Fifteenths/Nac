@@ -16,6 +16,8 @@ mod markup;
 mod net;
 mod routes;
 mod tls;
+#[cfg(feature = "admin")]
+mod tunnel;
 
 use markup::{Block, Inline, LinkTarget};
 
@@ -101,28 +103,32 @@ fn main() -> eframe::Result<()> {
 
     if list_sites {
         for site in &routes.sites {
+            let mode = match site.tls {
+                routes::TlsMode::Auto => "auto",
+                routes::TlsMode::On => "tls",
+                routes::TlsMode::Off => "plain",
+            };
+            let tunnel = match &site.ssh {
+                Some(dest) if cfg!(feature = "admin") => format!("\tssh={dest}"),
+                Some(_) => "\tssh（本构建不支持）".to_string(),
+                None => String::new(),
+            };
             if from_embedded {
                 println!(
-                    "{}{}\t{}",
+                    "{}{}\t{}{}",
                     if site.default { "*" } else { " " },
                     site.name,
-                    match site.tls {
-                        routes::TlsMode::Auto => "auto",
-                        routes::TlsMode::On => "tls",
-                        routes::TlsMode::Off => "plain",
-                    }
+                    mode,
+                    tunnel
                 );
             } else {
                 println!(
-                    "{}{}\t{}\t{}",
+                    "{}{}\t{}\t{}{}",
                     if site.default { "*" } else { " " },
                     site.name,
                     site.endpoint,
-                    match site.tls {
-                        routes::TlsMode::Auto => "auto",
-                        routes::TlsMode::On => "tls",
-                        routes::TlsMode::Off => "plain",
-                    }
+                    mode,
+                    tunnel
                 );
             }
         }
@@ -194,6 +200,15 @@ fn selftest_run(routes: &routes::Routes, site_name: &str) -> eframe::Result<()> 
     let Some(site) = routes.get(site_name) else {
         println!("site {site_name}: missing");
         return Ok(());
+    };
+    // Keep the tunnel alive for the whole run; dropping it kills `ssh`.
+    #[cfg(feature = "admin")]
+    let _tunnel = match tunnel::Tunnel::ensure(site) {
+        Ok(tunnel) => tunnel,
+        Err(message) => {
+            println!("tunnel: {message}");
+            return Ok(());
+        }
     };
     let mut client = net::Client::with_tls(site.endpoint.clone(), site.tls);
     match client.hello() {
@@ -443,6 +458,8 @@ struct Viewer {
     loading: bool,
     routes: routes::Routes,
     site: String,
+    #[cfg(feature = "admin")]
+    tunnel: Option<tunnel::Tunnel>,
     entries: Vec<net::Entry>,
     page_id: Option<u16>,
     title: String,
@@ -489,6 +506,8 @@ impl Viewer {
             loading: false,
             routes,
             site,
+            #[cfg(feature = "admin")]
+            tunnel: None,
             entries: Vec::new(),
             page_id: None,
             title: String::new(),
@@ -514,6 +533,18 @@ impl Viewer {
             target: start_page.map(Target::Page),
         };
         v.addr_input = v.address_text();
+        #[cfg(feature = "admin")]
+        {
+            // Bring up the forward for the starting site before the first fetch.
+            if let Some(spec) = v.routes.get(&v.site).cloned() {
+                if spec.ssh.is_some() {
+                    match tunnel::Tunnel::ensure(&spec) {
+                        Ok(t) => v.tunnel = t,
+                        Err(message) => v.fail(message),
+                    }
+                }
+            }
+        }
         v.bootstrap();
         v
     }
@@ -591,6 +622,22 @@ impl Viewer {
     }
 
     fn connect(&mut self, site: String, target: Option<Target>) {
+        #[cfg(feature = "admin")]
+        {
+            self.tunnel = None;
+            if let Some(spec) = self.routes.get(&site).cloned() {
+                if spec.ssh.is_some() {
+                    match tunnel::Tunnel::ensure(&spec) {
+                        Ok(t) => self.tunnel = t,
+                        Err(message) => {
+                            self.site = site;
+                            self.fail(message);
+                            return;
+                        }
+                    }
+                }
+            }
+        }
         let endpoint = self
             .routes
             .get(&site)

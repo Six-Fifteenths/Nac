@@ -13,3 +13,6 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 
 [features]
 windows_gui = []
+# Operator build: lets the viewer open an SSH tunnel for sites marked `ssh=`.
+# The distributed viewer is built without it, so no shell-spawning code ships.
+admin = []

@@ -36,6 +36,9 @@ pub struct Site {
     pub endpoint: String,
     pub default: bool,
     pub tls: TlsMode,
+    /// `ssh=user@host`: the operator build opens this tunnel itself. Only
+    /// parsed for convenience; the distributed build has no code to act on it.
+    pub ssh: Option<String>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -64,17 +67,30 @@ impl Routes {
                 None => token.to_string(),
             };
             let endpoint = with_default_port(endpoint);
-            // Third token, optional: `tls` or `plain`. Absent means Auto.
-            let tls = match parts.next() {
-                Some("tls") => TlsMode::On,
-                Some("plain") => TlsMode::Off,
-                _ => TlsMode::Auto,
-            };
+            // Remaining tokens are flags, in any order:
+            //   tls | plain      how to encrypt
+            //   ssh=user@host    the operator build opens a tunnel to it
+            let mut tls = TlsMode::Auto;
+            let mut ssh = None;
+            for flag in parts {
+                match flag {
+                    "tls" => tls = TlsMode::On,
+                    "plain" => tls = TlsMode::Off,
+                    _ => {
+                        if let Some(dest) = flag.strip_prefix("ssh=") {
+                            if !dest.is_empty() {
+                                ssh = Some(dest.to_string());
+                            }
+                        }
+                    }
+                }
+            }
             sites.push(Site {
                 name: name.to_string(),
                 endpoint,
                 default,
                 tls,
+                ssh,
             });
         }
         if !sites.iter().any(|s| s.default) {
@@ -92,6 +108,7 @@ impl Routes {
                 endpoint: with_default_port(endpoint.to_string()),
                 default: true,
                 tls: TlsMode::Auto,
+                ssh: None,
             }],
         }
     }
@@ -268,6 +285,21 @@ local   MTI3LjAuMC4xOjcwMDA=
         assert_eq!(routes.get("home").unwrap().tls, TlsMode::On);
         assert_eq!(routes.get("console").unwrap().tls, TlsMode::Off);
         assert_eq!(routes.get("local").unwrap().tls, TlsMode::Auto);
+    }
+
+    #[test]
+    fn ssh_flag_is_optional_and_order_independent() {
+        let text = "\
+console MTI3LjAuMC4xOjcwMDE=  plain ssh=root@example.test
+other   MTI3LjAuMC4xOjcwMDE=  ssh=root@example.test plain
+plain   MTI3LjAuMC4xOjcwMDE=
+";
+        let routes = Routes::parse(text);
+        let console = routes.get("console").unwrap();
+        assert_eq!(console.tls, TlsMode::Off);
+        assert_eq!(console.ssh.as_deref(), Some("root@example.test"));
+        assert_eq!(routes.get("other").unwrap().ssh.as_deref(), Some("root@example.test"));
+        assert_eq!(routes.get("plain").unwrap().ssh, None);
     }
 
     #[test]

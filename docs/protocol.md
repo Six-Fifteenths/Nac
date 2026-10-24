@@ -112,6 +112,9 @@ console MTI3LjAuMC4xOjcwMDE=   tls
 - 第三个字段决定这条连接怎么加密：`tls` 强制 TLS（构建里没有 pin 就启动时警告并连不上）、
   `plain` 强制明文、省略则"有 pin 就用 TLS，没有就明文"。因此**加密是按站点而不是按进程决定**的，
   一个客户端可以同时连公网 TLS 站点和隧道里的明文站点。
+- `ssh=用户@服务器`：只有 `--features admin` 构建的管理员版才认这个标记，它自己拉起
+  `ssh -N -L <端口>:<主机>:<端口>`。分发版不编译这段代码，所以普通用户拿到 exe 也没有
+  任何可以启动子进程的能力。
 - 查找顺序：`--routes` → `NAC_ROUTES` → **可执行文件同目录** → 当前目录 → 同名 `.example`。
 - 地址栏语法：`nac.local/`、`nac.local/about`、`/about`、`about`、`名字.nac.local/about`；旧的 `名字/7`、`nac://名字/7` 仍按内部页号解析；**真实主机地址被拒绝**。
 
