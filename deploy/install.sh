@@ -42,6 +42,7 @@ for bin in contentd publish probe; do
 done
 [ -f site/1.py ] || { echo "请在仓库根目录运行" >&2; exit 1; }
 command -v python3 >/dev/null || { echo "服务器上需要 python3" >&2; exit 1; }
+command -v openssl >/dev/null || { echo "服务器上需要 openssl" >&2; exit 1; }
 
 echo "== 用户、组与目录"
 getent group "$SHARE_GROUP" >/dev/null 2>&1 || groupadd -r "$SHARE_GROUP"
@@ -62,6 +63,20 @@ install -d -m 2770 -o "$PUBLIC_USER" -g "$SHARE_GROUP" \
     "$DEST/data" "$DEST/data/state" "$DEST/data/appdata" "$DEST/archive"
 [ -e "$DEST/data/access.jsonl" ] || \
     install -m 0660 -o "$PUBLIC_USER" -g "$SHARE_GROUP" /dev/null "$DEST/data/access.jsonl"
+
+echo "== TLS 证书"
+install -d -m 0755 -o root -g root /etc/ssl/nac
+if [ ! -s /etc/ssl/nac/public.crt ] || [ ! -s /etc/ssl/nac/public.key ]; then
+    openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes \
+        -days 3650 -subj "/CN=nac.local" \
+        -addext "subjectAltName=DNS:nac.local" \
+        -keyout /etc/ssl/nac/public.key -out /etc/ssl/nac/public.crt
+fi
+chown "$PUBLIC_USER:$PUBLIC_USER" /etc/ssl/nac/public.key
+chmod 600 /etc/ssl/nac/public.key
+chmod 644 /etc/ssl/nac/public.crt
+openssl x509 -in /etc/ssl/nac/public.crt -outform der | sha256sum | awk '{print $1}' > /etc/ssl/nac/public.pin
+chmod 644 /etc/ssl/nac/public.pin
 
 # unit 里的沙箱指令需要 systemd 232+；更老的话 unit 会加载失败。
 if command -v systemctl >/dev/null 2>&1; then
@@ -184,21 +199,9 @@ systemctl show -p User --value nac-contentd || true
 systemctl show -p User --value nac-console || true
 echo "-- 监听（应该只有 127.0.0.1 上的 7000/7001，除非你选了 --bind-public）"
 ss -ltnp 2>/dev/null | grep -E ':700[01]' || true
-echo "-- 取一页看看"
-python3 - <<'PY' || echo "（自检脚本失败，手动跑 probe 更直观）"
-import socket, sys
-host, port = "127.0.0.1", 7000
-try:
-    s = socket.create_connection((host, port), timeout=3)
-    # REQ / manifest：16 字节会话 + op 0
-    payload = bytes(16) + b"\x00"
-    frame = (1 + len(payload)).to_bytes(4, "big") + b"\x01" + payload
-    s.sendall(frame)
-    data = s.recv(4096)
-    print("manifest frame:", len(data), "bytes")
-except Exception as exc:
-    print("连接失败:", exc)
-PY
+echo "-- 取一页看看（TLS pin）"
+"$DEST/bin/probe" --tls-pin-file /etc/ssl/nac/public.pin --addr 127.0.0.1:7000 health || \
+    echo "（自检失败，手动检查设备日志或 pin 文件）"
 
 echo
 echo "接下来："

@@ -5,3 +5,4 @@ edition = "2021"
 
 [dependencies]
 protocol = { path = "../protocol" }
+tls-client = { path = "../tls-client" }

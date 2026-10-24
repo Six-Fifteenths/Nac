@@ -8,18 +8,39 @@
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
+use std::sync::{Arc, OnceLock};
 
 use protocol::{
     decode_server, encode_client, ClientMsg, Request, ServerMsg, SESSION_LEN,
 };
+use tls_client::{ReadWrite, TlsClientConfig};
+
+static TLS_CONFIG: OnceLock<Option<Arc<TlsClientConfig>>> = OnceLock::new();
 
 fn main() {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     let mut addr = "127.0.0.1:7000".to_string();
+    if args.len() >= 2 && args[0] == "--tls-pin-file" {
+        let path = args[1].clone();
+        args.drain(0..2);
+        let text = std::fs::read_to_string(&path).map_err(|e| e.to_string());
+        let text = text.unwrap_or_else(|e| { eprintln!("tls pin: {e}"); std::process::exit(1) });
+        let text = text.trim();
+        if text.len() != 64 || !text.chars().all(|c| c.is_ascii_hexdigit()) {
+            eprintln!("tls pin: expected 64 hex chars in {path}");
+            std::process::exit(1);
+        }
+        let mut bytes = [0u8; 32];
+        for i in 0..32 {
+            bytes[i] = u8::from_str_radix(&text[i * 2..i * 2 + 2], 16).unwrap();
+        }
+        TLS_CONFIG.set(Some(tls_client::client_config(bytes))).ok();
+    }
     if args.len() >= 2 && args[0] == "--addr" {
         addr = args[1].clone();
         args.drain(0..2);
     }
+    let _ = TLS_CONFIG.get();
     if args.is_empty() {
         eprintln!("usage: probe [--addr host:port] manifest|page <id>|image <id>|submit <id> k=v...");
         std::process::exit(2);
@@ -105,8 +126,14 @@ fn parse_session(hex: &str) -> [u8; SESSION_LEN] {
     out
 }
 
+fn connect(addr: &str) -> Result<Box<dyn ReadWrite>, String> {
+    let stream = TcpStream::connect(addr).map_err(|e| e.to_string())?;
+    let config = TLS_CONFIG.get().cloned().flatten();
+    tls_client::wrap(stream, config).map_err(|_| "TLS handshake setup failed".to_string())
+}
+
 fn call(addr: &str, msg: ClientMsg) -> Result<Vec<ServerMsg>, String> {
-    let mut stream = TcpStream::connect(addr).map_err(|e| e.to_string())?;
+    let mut stream = connect(addr)?;
     stream.write_all(&encode_client(&msg)).map_err(|e| e.to_string())?;
     let mut out = Vec::new();
     loop {
@@ -157,7 +184,7 @@ fn fetch(addr: &str, session: [u8; SESSION_LEN], id: u16, image: bool) -> Result
 }
 
 fn fetch_stream(addr: &str, session: [u8; SESSION_LEN], id: u16) -> Result<(), String> {
-    let mut stream = TcpStream::connect(addr).map_err(|e| e.to_string())?;
+    let mut stream = connect(addr)?;
     let msg = ClientMsg {
         session,
         request: Request::ImageStream(id, 0),
@@ -218,7 +245,7 @@ fn hex(bytes: &[u8]) -> String {
     s
 }
 
-fn read_frame(stream: &mut TcpStream) -> Result<Vec<u8>, String> {
+fn read_frame<R: Read + ?Sized>(stream: &mut R) -> Result<Vec<u8>, String> {
     let mut len_buf = [0u8; 4];
     stream.read_exact(&mut len_buf).map_err(|e| e.to_string())?;
     let len = u32::from_be_bytes(len_buf) as usize;

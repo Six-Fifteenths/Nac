@@ -15,6 +15,7 @@ mod loader;
 mod markup;
 mod net;
 mod routes;
+mod tls;
 
 use markup::{Block, Inline};
 
@@ -26,6 +27,7 @@ fn main() -> eframe::Result<()> {
     let mut encode: Option<String> = None;
     let mut list_sites = false;
     let mut start_page: Option<u16> = None;
+    let mut plaintext = false;
 
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut i = 0;
@@ -63,9 +65,14 @@ fn main() -> eframe::Result<()> {
                 }
             }
             "--selftest" => selftest = true,
+            "--plaintext" => plaintext = true,
             _ => {}
         }
         i += 1;
+    }
+
+    if plaintext {
+        tls::disable_plaintext();
     }
 
     if let Some(value) = encode {

@@ -2,6 +2,8 @@ use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::time::Duration;
 
+use crate::tls::ReadWrite;
+
 use protocol::{decode_server, encode_client, ClientMsg, Request, ServerMsg, SESSION_LEN};
 
 #[derive(Clone, Debug)]
@@ -25,10 +27,11 @@ impl Client {
         }
     }
 
-    fn open(&self, request: Request) -> Result<TcpStream, ()> {
-        let mut stream = TcpStream::connect(&self.addr).map_err(|_| ())?;
+    fn open(&self, request: Request) -> Result<Box<dyn ReadWrite>, ()> {
+        let stream = TcpStream::connect(&self.addr).map_err(|_| ())?;
         stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
         stream.set_write_timeout(Some(Duration::from_secs(5))).ok();
+        let mut stream = crate::tls::wrap(stream)?;
 
         let msg = ClientMsg {
             session: self.session,
@@ -40,7 +43,7 @@ impl Client {
 
     fn call(&mut self, request: Request) -> Result<ServerMsg, ()> {
         let mut stream = self.open(request)?;
-        let frame = read_frame(&mut stream)?;
+        let frame = read_frame(&mut *stream)?;
         decode_server(&frame).ok_or(())
     }
 
@@ -131,7 +134,7 @@ impl Client {
     }
 }
 
-fn read_frame(stream: &mut TcpStream) -> Result<Vec<u8>, ()> {
+fn read_frame<R: Read + ?Sized>(stream: &mut R) -> Result<Vec<u8>, ()> {
     let mut len_buf = [0u8; 4];
     stream.read_exact(&mut len_buf).map_err(|_| ())?;
     let len = u32::from_be_bytes(len_buf) as usize;

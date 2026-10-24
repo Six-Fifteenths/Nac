@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/protocol",
+    "crates/tls-client",
     "crates/contentd",
     "crates/publish",
     "crates/probe",

@@ -4,8 +4,8 @@
 //! "missing page" from "script crashed" from "bad request".
 
 use std::fs;
-use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::io::{BufReader, Read, Write};
+use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -17,6 +17,7 @@ use protocol::{
     decode_client, encode_server, ManifestEntry, Request, ServerMsg, CHUNK, MAX_FRAME,
     SESSION_LEN, VERSION,
 };
+use rustls::{ServerConfig, ServerConnection, StreamOwned};
 
 const PY_TIMEOUT: Duration = Duration::from_secs(2);
 const PY_MAX_OUTPUT: usize = 128 * 1024;
@@ -124,6 +125,8 @@ fn main() {
     let mut bind = "127.0.0.1".to_string();
     let mut env: Vec<(String, String)> = Vec::new();
     let mut log: Option<PathBuf> = None;
+    let mut tls_cert: Option<PathBuf> = None;
+    let mut tls_key: Option<PathBuf> = None;
     let mut session_ttl = Duration::from_secs(7 * 24 * 3600);
     let mut allow_root = false;
     let mut args = std::env::args().skip(1);
@@ -137,6 +140,8 @@ fn main() {
                     .unwrap_or_else(|| "127.0.0.1".to_string())
             }
             "--log" => log = args.next().map(PathBuf::from),
+            "--tls-cert" => tls_cert = args.next().map(PathBuf::from),
+            "--tls-key" => tls_key = args.next().map(PathBuf::from),
             "--allow-root" => allow_root = true,
             "--session-ttl-hours" => {
                 let hours = args.next().and_then(|v| v.parse::<u64>().ok()).unwrap_or(168);
@@ -155,6 +160,18 @@ fn main() {
             }
         }
     }
+
+    let tls = match (tls_cert, tls_key) {
+        (Some(cert), Some(key)) => Some(load_tls(&cert, &key).unwrap_or_else(|e| {
+            eprintln!("tls: {e}");
+            std::process::exit(1);
+        })),
+        (None, None) => None,
+        _ => {
+            eprintln!("--tls-cert 与 --tls-key 必须同时给出");
+            std::process::exit(2);
+        }
+    };
 
     // Page scripts run with this process's privileges, so starting as root would
     // turn any page bug into a root compromise. Refuse rather than warn: a unit
@@ -209,10 +226,22 @@ fn main() {
                     drop(stream);
                     continue;
                 }
+                let _ = stream.set_read_timeout(Some(READ_TIMEOUT));
                 let st = state.clone();
+                let tls = tls.clone();
                 let active_thread = active.clone();
                 if let Err(e) = thread::Builder::new().spawn(move || {
-                    if let Err(e) = handle(stream, st) {
+                    if let Some(cfg) = tls {
+                        match ServerConnection::new(cfg) {
+                            Ok(conn) => {
+                                let mut stream = StreamOwned::new(conn, stream);
+                                if let Err(e) = handle(&mut stream, st) {
+                                    eprintln!("connection: {e}");
+                                }
+                            }
+                            Err(e) => eprintln!("tls: {e}"),
+                        }
+                    } else if let Err(e) = handle(stream, st) {
                         eprintln!("connection: {e}");
                     }
                     active_thread.fetch_sub(1, Ordering::Relaxed);
@@ -226,9 +255,24 @@ fn main() {
     }
 }
 
-fn handle(mut stream: TcpStream, state: Arc<State>) -> std::io::Result<()> {
+fn load_tls(cert: &Path, key: &Path) -> Result<Arc<ServerConfig>, String> {
+    let mut cert_reader = BufReader::new(fs::File::open(cert).map_err(|e| e.to_string())?);
+    let certs = rustls_pemfile::certs(&mut cert_reader)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+    let mut key_reader = BufReader::new(fs::File::open(key).map_err(|e| e.to_string())?);
+    let key = rustls_pemfile::private_key(&mut key_reader)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "TLS key file contains no private key".to_string())?;
+    let config = ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(certs, key)
+        .map_err(|e| e.to_string())?;
+    Ok(Arc::new(config))
+}
+
+fn handle<S: Read + Write>(mut stream: S, state: Arc<State>) -> std::io::Result<()> {
     let started = Instant::now();
-    stream.set_read_timeout(Some(READ_TIMEOUT))?;
     let Some(frame) = read_frame(&mut stream)? else {
         return Ok(());
     };
@@ -449,14 +493,14 @@ fn image_frames(id: u16, bytes: &[u8], offset: u32) -> Vec<ServerMsg> {
     out
 }
 
-fn send(stream: &mut TcpStream, msgs: &[ServerMsg]) -> std::io::Result<()> {
+fn send<W: Write>(stream: &mut W, msgs: &[ServerMsg]) -> std::io::Result<()> {
     for m in msgs {
         stream.write_all(&encode_server(m))?;
     }
     stream.flush()
 }
 
-fn read_frame(stream: &mut TcpStream) -> std::io::Result<Option<Vec<u8>>> {
+fn read_frame<R: Read>(stream: &mut R) -> std::io::Result<Option<Vec<u8>>> {
     let mut len_buf = [0u8; 4];
     if stream.read_exact(&mut len_buf).is_err() {
         return Ok(None);

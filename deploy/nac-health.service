@@ -5,7 +5,7 @@ After=network.target
 [Service]
 Type=oneshot
 User=nac-public
-ExecStart=/srv/nac/bin/probe --addr 127.0.0.1:7000 health
+ExecStart=/srv/nac/bin/probe --tls-pin-file /etc/ssl/nac/public.pin --addr 127.0.0.1:7000 health
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
