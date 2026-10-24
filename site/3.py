@@ -1,4 +1,5 @@
 # nac:title 并排排版
+# nac:static
 # 演示 nac.cols()：同一个页面里做分栏。
 # 不写 nac.col() 时按块数平均切；写了就按你指定的位置切。
 

@@ -26,7 +26,15 @@ result = nac.session().get("last_publish")
 if "go" in nac.fields():
     try:
         done = subprocess.run(
-            [publish_bin(root), "--site", str(root / "site"), "--data", str(root / "data")],
+            [
+                publish_bin(root),
+                "--site",
+                str(root / "site"),
+                "--data",
+                str(root / "data"),
+                "--archive",
+                str(root / "archive"),
+            ],
             capture_output=True,
             timeout=1.5,
             cwd=str(root),

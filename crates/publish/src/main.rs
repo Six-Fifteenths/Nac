@@ -11,7 +11,7 @@
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::Write;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -148,7 +148,7 @@ fn run(site: &Path, data: &Path, archive: Option<&Path>) -> Result<(), String> {
             if let Some(parent) = dest.parent() {
                 fs::create_dir_all(parent).map_err(|e| e.to_string())?;
             }
-            fs::copy(src, &dest).map_err(|e| format!("archive {}: {e}", dest.display()))?;
+            archive_original(src, &dest)?;
         }
         let raw = fs::read(src).map_err(|e| format!("{rel}: {e}"))?;
         let clean = images::strip(&raw).map_err(|e| format!("{rel}: {e}"))?;
@@ -360,6 +360,26 @@ fn render_static(scripts: &Path, id: u16, data: &Path) -> Result<Vec<u8>, String
         return Err(format!("static {id}.py: {detail}"));
     }
     Ok(output.stdout)
+}
+
+/// Copy an original into the archive without inheriting its mode bits.
+///
+/// `fs::copy` also copies permissions, which fails with EPERM when the target
+/// belongs to the other publishing user; the install script and the console
+/// share this directory, so overwrite the bytes in place instead.
+fn archive_original(src: &Path, dest: &Path) -> Result<(), String> {
+    let mut input = fs::File::open(src).map_err(|e| format!("{}: {e}", src.display()))?;
+    let mut output = fs::OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open(dest)
+        .map_err(|e| format!("{}: {e}", dest.display()))?;
+    io::copy(&mut input, &mut output).map_err(|e| format!("{}: {e}", dest.display()))?;
+    output
+        .sync_all()
+        .map_err(|e| format!("{}: {e}", dest.display()))?;
+    Ok(())
 }
 
 fn switch_current(data: &Path, gen: &str) -> Result<(), String> {

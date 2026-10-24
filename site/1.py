@@ -1,4 +1,5 @@
 # nac:title 白塔
+# nac:static
 # 每个页面就是一个 Python 程序：拼好内容，nac.done() 输出。
 # 页标题写在上面那行注释里，publish 会读走它。
 
