@@ -194,6 +194,15 @@ def _url(path):
     return path if path.startswith("/") else "/" + path
 
 
+def _path_id(path):
+    path = _url(path)
+    page = PATHS.get(path)
+    if page is None:
+        alt = path.rstrip("/") if path.endswith("/") else path + "/"
+        page = PATHS.get(alt)
+    return page
+
+
 def link_path(path, text):
     """指向路径；目录用带尾斜杠的路径（如 /notes/）。"""
     _buf.append("[[path:%s|%s]]" % (_url(path), _cell(text)))
@@ -211,7 +220,7 @@ def redirect(page):
 
 def redirect_path(path):
     """按路径立刻跳转；路径不存在时什么也不做。"""
-    page = PATHS.get(_url(path))
+    page = _path_id(path)
     if page is not None:
         redirect(page)
 
@@ -230,7 +239,7 @@ def form(page):
 
 def form_path(path):
     """声明表单提交到某个路径；路径不存在时不设置表单。"""
-    page = PATHS.get(_url(path))
+    page = _path_id(path)
     if page is not None:
         form(page)
 
