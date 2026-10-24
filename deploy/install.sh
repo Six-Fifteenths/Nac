@@ -85,10 +85,16 @@ if [ "$BIND" != "127.0.0.1" ]; then
 fi
 
 systemctl daemon-reload
-systemctl enable --now $UNITS || {
+systemctl enable $UNITS || {
+    echo "!! 服务 enable 失败，先看状态：" >&2
+    echo "   systemctl status nac-contentd nac-console --no-pager -l" >&2
+    exit 1
+}
+systemctl restart $UNITS || {
     echo "!! 服务启动失败，先看日志：" >&2
-    echo "   systemctl status nac-contentd --no-pager -l" >&2
+    echo "   systemctl status nac-contentd nac-console --no-pager -l" >&2
     echo "   journalctl -u nac-contentd -n 30 --no-pager" >&2
+    echo "   journalctl -u nac-console -n 30 --no-pager" >&2
     exit 1
 }
 

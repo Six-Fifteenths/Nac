@@ -296,7 +296,7 @@ sudo ./deploy/install.sh --bind-public   # 同上，但公开站点绑 0.0.0.0�
 ```
 
 脚本会建 `nac` 用户、装二进制、同步源码、以 `nac` 身份发布两套站点、按目标目录改写并安装两个
-systemd unit、`enable --now`，最后自检（`is-active`、`ss -ltnp`、用一个裸帧取一次 manifest）。
+systemd unit、`enable` + `restart`，最后自检（`is-active`、`ss -ltnp`、用一个裸帧取一次 manifest）。
 
 **注意**：两个 unit 默认都只绑 `127.0.0.1`，装完外人是连不上的——这是"不暴露 IP"的当前状态。
 要让普通用户访问，要先定传输层；临时直连才用 `--bind-public`。
@@ -335,7 +335,7 @@ systemd unit、`enable --now`，最后自检（`is-active`、`ss -ltnp`、用一
 
 **做到了**
 
-- 客户端界面、错误信息、二进制里都没有端点；端点只存在于 `nac.routes`（不进仓库）。
+- 客户端界面、错误信息、普通构建的二进制里都没有端点；端点只在 `nac.routes`，或按需在编译期通过 `NAC_EMBED_ROUTES` 嵌入（字符混淆，不是保密）。
 - 地址栏不接受主机地址，普通用户没有"输入 IP"这个概念。
 - 发布链路剥掉图片元数据（GPS、机型、作者、时间），**像素不变**。
 - 失败统一为 `EMPTY`，不向客户端泄露失败原因；原因只在服务端日志。

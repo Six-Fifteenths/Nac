@@ -40,10 +40,10 @@ ProtectKernelModules=yes
 ProtectControlGroups=yes
 # 会话文件默认只有属主可读。
 UMask=0077
-# 更严的几条需要较新 systemd（242 / 245 / 247），确认版本后再放开：
-# ProtectHostname=yes
-# ProtectClock=yes
-# ProtectProc=invisible
+# systemd 257：对其他用户隐藏进程；同 UID 仍可经 /proc/<pid>/root 访问，强隔离需拆用户。
+ProtectProc=invisible
+ProcSubset=pid
+SystemCallFilter=~@debug
 
 [Install]
 WantedBy=multi-user.target

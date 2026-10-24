@@ -76,8 +76,9 @@ sudo systemctl enable --now nac-contentd nac-console
 | `nac-contentd.service` | 7000 | `127.0.0.1` | 公开站点，带 `--log data/access.jsonl` 与 `--session-ttl-hours 168` |
 | `nac-console.service` | 7001 | `127.0.0.1` | 运营台，额外传 `NAC_ROOT`、`NAC_LOG` |
 
-两个 unit 都带 `Restart=always`、`NoNewPrivileges=yes`、`ProtectSystem=full`、
-`ProtectHome=yes`、`PrivateTmp=yes`。
+两个 unit 都带 `Restart=always`、`NoNewPrivileges=yes`、`ProtectSystem=strict`、
+`ProtectHome=yes`、`PrivateTmp=yes`、`ProtectProc=invisible`、`ProcSubset=pid`、
+`SystemCallFilter=~@debug`。
 
 **默认只绑回环，所以装完外人是连不上的。** 这是"不把 IP 交出去"的当前状态：
 
@@ -183,9 +184,15 @@ console MTI3LjAuMC4xOjcwMDE=
 
 从旧版本升级上来时，`/srv/nac/access.jsonl` 会留在原地不再写入；确认新日志正常后可以删掉它。
 
-这些指令都需要 systemd 232+（CentOS 8 / Debian 10 / Ubuntu 20.04 起）。更老的系统上 unit
-会加载失败，`install.sh` 会检测版本并提示。`ProtectHostname` / `ProtectClock` /
-`ProtectProc` 需要更新的 systemd，已作为注释留在文件里，确认版本后可放开。
+这些指令大多需要 systemd 232+（CentOS 8 / Debian 10 / Ubuntu 20.04 起）。`ProtectProc` /
+`ProcSubset` 需要 systemd 247+；当前部署为 systemd 257，已启用。更老的系统上 unit 会加载失败，
+`install.sh` 会检测版本并提示。`ProtectHostname` / `ProtectClock` 仍作为可选注释保留。
+
+注意：`InaccessiblePaths` 只隐藏直接路径；`ProtectProc` 只能对**其他用户**隐藏进程，同 UID 的
+另一个服务仍可通过 `/proc/<pid>/root` 进入它的挂载命名空间。`SystemCallFilter=~@debug` 禁用了
+ptrace/process_vm（防调试注入），但不阻止 `openat`。因此当前模型能阻止公开页面直接读取运营台
+源码/数据和 ptrace，但不能阻止同 UID 的 `/proc` 逃逸；要做强隔离，最终应把公开站与运营台拆成
+不同系统用户（公开站数据用组权限共享给运营台发布）。
 
 ### 5.1 逐项检查
 
