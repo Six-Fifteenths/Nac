@@ -1,4 +1,5 @@
 # nac:title 留言板
+# nac:path /guestbook
 # 演示：读表单、存会话、往站点私有目录里追加记录、计数。
 
 import nac
@@ -26,6 +27,6 @@ nac.form(7)
 nac.field("name", "你的名字")
 nac.button("留下")
 nac.gap()
-nac.link(1, "回首页")
+nac.link_path("/", "回首页")
 
 nac.done()

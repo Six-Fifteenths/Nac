@@ -1,4 +1,5 @@
 # nac:title 运营台 · 概览
+# nac:path /
 # 这个站点只在本机 7001 上跑，用 ssh -L 转发到你自己的电脑上看。
 # NAC_ROOT 由 contentd --env 传进来，指向工作区根目录。
 
@@ -59,9 +60,9 @@ nac.bullets(
 nac.gap()
 
 nac.h2("快捷")
-nac.link(2, "发布新代")
-nac.link(3, "看数据 / 清留言")
-nac.link(4, "内容清单")
-nac.link(5, "访问统计")
+nac.link_path("/publish", "发布新代")
+nac.link_path("/data", "看数据 / 清留言")
+nac.link_path("/inventory", "内容清单")
+nac.link_path("/stats", "访问统计")
 
 nac.done()

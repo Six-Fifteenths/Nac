@@ -7,7 +7,7 @@
 //! No magic bytes, no version field: both are fingerprints.
 //! Every decoder returns `None` on anything malformed, and never panics.
 
-pub const VERSION: u16 = 2;
+pub const VERSION: u16 = 3;
 pub const MAX_FRAME: usize = 32768;
 pub const CHUNK: usize = 16384;
 pub const SESSION_LEN: usize = 16;
@@ -26,6 +26,8 @@ pub struct ManifestEntry {
     pub dynamic: bool,
     pub hash: u64,
     pub title: String,
+    /// Path shown to the reader, e.g. `/` or `/notes/`.
+    pub path: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -139,6 +141,10 @@ pub fn encode_server(msg: &ServerMsg) -> Vec<u8> {
                 let tl = tb.len().min(u16::MAX as usize) as u16;
                 p.extend_from_slice(&tl.to_be_bytes());
                 p.extend_from_slice(&tb[..tl as usize]);
+                let pb = e.path.as_bytes();
+                let pl = pb.len().min(u16::MAX as usize) as u16;
+                p.extend_from_slice(&pl.to_be_bytes());
+                p.extend_from_slice(&pb[..pl as usize]);
             }
             frame(T_MANIFEST, &p)
         }
@@ -323,11 +329,14 @@ pub fn decode_server(buf: &[u8]) -> Option<ServerMsg> {
                 let hash = r.u64()?;
                 let tl = r.u16()? as usize;
                 let title = r.string(tl)?;
+                let pl = r.u16()? as usize;
+                let path = r.string(pl)?;
                 entries.push(ManifestEntry {
                     id,
                     dynamic: flags & 1 == 1,
                     hash,
                     title,
+                    path,
                 });
             }
             if !r.done() {
@@ -422,12 +431,14 @@ mod tests {
                 dynamic: false,
                 hash: 42,
                 title: "白塔".into(),
+                path: "/".into(),
             },
             ManifestEntry {
                 id: 7,
                 dynamic: true,
                 hash: 0,
                 title: String::new(),
+                path: "/guestbook".into(),
             },
         ];
         let msgs = vec![

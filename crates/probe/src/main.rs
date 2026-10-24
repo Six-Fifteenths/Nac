@@ -218,10 +218,11 @@ fn print_msgs(msgs: Vec<ServerMsg>, id: u16, _image: bool) -> Result<(), String>
                 println!("session {}", hex(&session));
                 for e in entries {
                     println!(
-                        "  {}\t{}\t{:016x}\t{}",
+                        "  {}\t{}\t{:016x}\t{}\t{}",
                         e.id,
                         if e.dynamic { "dyn " } else { "stat" },
                         e.hash,
+                        e.path,
                         e.title
                     );
                 }

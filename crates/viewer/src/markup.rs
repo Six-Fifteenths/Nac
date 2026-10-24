@@ -9,6 +9,12 @@ pub enum Inline {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub enum LinkTarget {
+    Page(u16),
+    Path(String),
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub enum Block {
     Heading(u8, Vec<Inline>),
     Para(Vec<Inline>),
@@ -16,7 +22,7 @@ pub enum Block {
     List(Vec<Vec<Inline>>),
     Pre(String),
     Image { id: u16, pct: f32, ratio: Option<f32> },
-    Link { target: u16, text: String },
+    Link { target: LinkTarget, text: String },
     Form { target: u16 },
     Input { name: String, label: String, secret: bool },
     Button { label: String },
@@ -282,12 +288,25 @@ fn split_pipe(s: &str) -> Option<(&str, &str)> {
     s.split_once('|')
 }
 
-fn page_link(line: &str) -> Option<(u16, String)> {
+fn page_link(line: &str) -> Option<(LinkTarget, String)> {
     let rest = line.strip_prefix("[[")?;
     let end = rest.find("]]")?;
     let inner = &rest[..end];
-    let (id, text) = inner.split_once('|')?;
-    let target = id.trim().parse::<u16>().ok()?;
+    let (raw, text) = inner.split_once('|')?;
+    let raw = raw.trim();
+    let target = if let Some(path) = raw.strip_prefix("path:") {
+        let path = path.trim();
+        if path.is_empty() {
+            return None;
+        }
+        LinkTarget::Path(if path.starts_with('/') {
+            path.to_string()
+        } else {
+            format!("/{path}")
+        })
+    } else {
+        LinkTarget::Page(raw.parse::<u16>().ok()?)
+    };
     Some((target, text.trim().to_string()))
 }
 
@@ -390,7 +409,7 @@ mod tests {
 
     #[test]
     fn parses_structure() {
-        let src = "# 标题\n\n一段 *粗* 与 _斜_ 和 `码`。\n\n> 引用\n\n- a\n- b\n\n!img 3 80%\n\n[[2|第二页]]\n[[form 7]]\n[[input name|名字]]\n[[button 提交]]\n";
+        let src = "# 标题\n\n一段 *粗* 与 _斜_ 和 `码`。\n\n> 引用\n\n- a\n- b\n\n!img 3 80%\n\n[[2|第二页]]\n[[path:/notes/|笔记]]\n[[form 7]]\n[[input name|名字]]\n[[button 提交]]\n";
         let blocks = parse(src);
         assert!(blocks
             .iter()
@@ -405,7 +424,11 @@ mod tests {
             .any(|b| matches!(b, Block::Image { id: 3, .. })));
         assert!(blocks
             .iter()
-            .any(|b| matches!(b, Block::Link { target: 2, .. })));
+            .any(|b| matches!(b, Block::Link { target: LinkTarget::Page(2), .. })));
+        assert!(blocks.iter().any(|b| matches!(
+            b,
+            Block::Link { target: LinkTarget::Path(path), .. } if path == "/notes/"
+        )));
         assert!(blocks
             .iter()
             .any(|b| matches!(b, Block::Form { target: 7 })));

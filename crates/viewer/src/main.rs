@@ -17,7 +17,7 @@ mod net;
 mod routes;
 mod tls;
 
-use markup::{Block, Inline};
+use markup::{Block, Inline, LinkTarget};
 
 fn main() -> eframe::Result<()> {
     let mut addr: Option<String> = std::env::var("NAC_ADDR").ok();
@@ -173,10 +173,11 @@ fn selftest_run(routes: &routes::Routes, site_name: &str) -> eframe::Result<()> 
             println!("site {site_name}: {} entries", entries.len());
             for e in &entries {
                 println!(
-                    "  {}\t{}\t{:016x}\t{}",
+                    "  {}\t{}\t{:016x}\t{}\t{}",
                     e.id,
                     if e.dynamic { "dyn " } else { "stat" },
                     e.hash,
+                    e.path,
                     e.title
                 );
             }
@@ -291,48 +292,116 @@ fn stash_fields(
     }
 }
 
-/// Reads an address the way a user types it. Returns `(site, page)`.
+/// Reads an address the way a browser does. Returns `(site, path)`.
 ///
-/// Accepted: `/7`, `7`, `/` (home), `home/7`, `nac://home/7`.
+/// Accepted: `nac.local/`, `nac.local/about`, `about`, `/about`,
+/// `home.nac.local/about`, and the legacy `home/7` / `nac://home/7`.
 /// Endpoints are not accepted here on purpose — they live in the routes file,
 /// so nothing the user types or sees has to contain one.
 fn parse_address(
     input: &str,
     routes: &routes::Routes,
     current_site: &str,
-) -> Option<(String, Option<u16>)> {
+) -> Option<(String, String)> {
     let mut s = input.trim();
-    if let Some(rest) = s.strip_prefix("nac://") {
+    if let Some((_, rest)) = s.split_once("://") {
         s = rest;
     }
-    let s = s.trim_end_matches('/');
-    let bare_number = s.strip_prefix('/').unwrap_or(s);
-
+    if let Some(rest) = s.strip_prefix("//") {
+        s = rest;
+    }
+    let s = s.split(|c| c == '?' || c == '#').next().unwrap_or(s).trim();
     if s.is_empty() {
-        return Some((current_site.to_string(), None));
+        return Some((current_site.to_string(), "/".to_string()));
     }
-    if bare_number.is_empty() {
-        return Some((current_site.to_string(), None));
+
+    if !s.starts_with('/') {
+        if let Some((host, tail)) = s.split_once('/') {
+            if let Some(site) = origin_site(host, routes, current_site) {
+                return Some((site, normalize_path(&format!("/{tail}"))?));
+            }
+            if routes.get(host).is_some() {
+                return Some((host.to_string(), normalize_path(&format!("/{tail}"))?));
+            }
+        } else if let Some(site) = origin_site(s, routes, current_site) {
+            return Some((site, "/".to_string()));
+        } else if routes.get(s).is_some() {
+            return Some((s.to_string(), "/".to_string()));
+        }
+
+        // A bare word is a path on the current site; anything host-shaped
+        // (dot, port, IPv6 bracket) is not.
+        if s.contains('.') || s.contains(':') || s.contains('[') {
+            return None;
+        }
+        return Some((current_site.to_string(), normalize_path(&format!("/{s}"))?));
     }
-    if !bare_number.contains('/') {
-        if let Ok(id) = bare_number.parse::<u16>() {
-            return Some((current_site.to_string(), Some(id)));
+
+    Some((current_site.to_string(), normalize_path(s)?))
+}
+
+fn origin_site(host: &str, routes: &routes::Routes, current_site: &str) -> Option<String> {
+    if host.eq_ignore_ascii_case(ORIGIN) {
+        return Some(current_site.to_string());
+    }
+    let suffix = format!(".{ORIGIN}");
+    let prefix = host
+        .strip_suffix(&suffix)
+        .or_else(|| host.strip_suffix(&suffix.to_ascii_uppercase()))?;
+    if prefix.is_empty() {
+        return Some(current_site.to_string());
+    }
+    if routes.get(prefix).is_some() {
+        Some(prefix.to_string())
+    } else {
+        None
+    }
+}
+
+fn normalize_path(input: &str) -> Option<String> {
+    let mut parts = Vec::new();
+    for part in input.split('/') {
+        if part.is_empty() || part == "." {
+            continue;
+        }
+        if part == ".." {
+            return None;
+        }
+        parts.push(part);
+    }
+    let mut out = format!("/{}", parts.join("/"));
+    if input.ends_with('/') && out != "/" {
+        out.push('/');
+    }
+    Some(out)
+}
+
+fn resolve_path(entries: &[net::Entry], home: Option<u16>, path: &str) -> Option<u16> {
+    if let Some(entry) = entries.iter().find(|e| e.path == path) {
+        return Some(entry.id);
+    }
+    let alt = if path.ends_with('/') {
+        path.trim_end_matches('/').to_string()
+    } else {
+        format!("{path}/")
+    };
+    if !alt.is_empty() && alt != "/" {
+        if let Some(entry) = entries.iter().find(|e| e.path == alt) {
+            return Some(entry.id);
         }
     }
-
-    let (name, tail) = match s.split_once('/') {
-        Some((name, tail)) => (name, tail),
-        None => (s, ""),
-    };
-    if name.is_empty() || routes.get(name).is_none() {
-        return None;
+    if path == "/" {
+        return home;
     }
-    let page = if tail.is_empty() {
-        None
-    } else {
-        Some(tail.parse::<u16>().ok()?)
-    };
-    Some((name.to_string(), page))
+    None
+}
+
+const ORIGIN: &str = "nac.local";
+
+#[derive(Clone, Debug, PartialEq)]
+enum Target {
+    Page(u16),
+    Path(String),
 }
 
 // ------------------------------------------------------------------ viewer
@@ -362,10 +431,9 @@ struct Viewer {
     addr_focus: bool,
     addr_typing: bool,
     pending_sync: bool,
-    pending_page: Option<u16>,
     saved_fields: HashMap<u16, HashMap<String, String>>,
-    show_index: bool,
-    target: Option<u16>,
+    shown_path: Option<String>,
+    target: Option<Target>,
 }
 
 impl Viewer {
@@ -408,10 +476,9 @@ impl Viewer {
             addr_focus: false,
             addr_typing: false,
             pending_sync: false,
-            pending_page: None,
             saved_fields: HashMap::new(),
-            show_index: false,
-            target: start_page,
+            shown_path: None,
+            target: start_page.map(Target::Page),
         };
         v.addr_input = v.address_text();
         v.bootstrap();
@@ -419,16 +486,31 @@ impl Viewer {
     }
 
     /// What the user sees: a page on a site, never an endpoint.
-    fn address_text(&self) -> String {
-        let page = match self.page_id {
-            Some(id) => id.to_string(),
-            None => String::new(),
-        };
+    fn host(&self) -> String {
         if self.routes.sites.len() > 1 {
-            format!("{}/{page}", self.site)
+            format!("{}.{}", self.site, ORIGIN)
         } else {
-            format!("/{page}")
+            ORIGIN.to_string()
         }
+    }
+
+    fn path_of(&self, id: u16) -> Option<String> {
+        self.entries
+            .iter()
+            .find(|e| e.id == id)
+            .map(|e| e.path.clone())
+            .filter(|path| !path.is_empty())
+    }
+
+    /// What the user sees: a domain-like origin plus the page path, never an
+    /// endpoint or an internal page number.
+    fn address_text(&self) -> String {
+        let path = self
+            .shown_path
+            .clone()
+            .or_else(|| self.page_id.and_then(|id| self.path_of(id)))
+            .unwrap_or_else(|| "/".to_string());
+        format!("{}{}", self.host(), path)
     }
 
     fn bootstrap(&mut self) {
@@ -447,13 +529,21 @@ impl Viewer {
                 self.entries = entries;
                 self.failed = false;
                 self.error.clear();
-                self.home = self.entries.iter().map(|e| e.id).min();
-                match self.target.take().or(self.home) {
-                    Some(id) => self.load(id),
-                    None => {
-                        self.loading = false;
-                        self.fail("这个站点还没有任何页面");
-                    }
+                self.home = self
+                    .entries
+                    .iter()
+                    .find(|e| e.path == "/")
+                    .map(|e| e.id)
+                    .or_else(|| self.entries.iter().map(|e| e.id).min());
+                if self.entries.is_empty() {
+                    self.loading = false;
+                    self.fail("这个站点还没有任何页面");
+                    return;
+                }
+                match self.target.take() {
+                    Some(Target::Page(id)) => self.load(id),
+                    Some(Target::Path(path)) => self.open_path(&path),
+                    None => self.open_path("/"),
                 }
             }
             None => {
@@ -461,12 +551,13 @@ impl Viewer {
                 self.entries.clear();
                 self.home = None;
                 self.page_id = None;
+                self.shown_path = None;
                 self.fail("无法连接到服务器");
             }
         }
     }
 
-    fn connect(&mut self, site: String, page: Option<u16>) {
+    fn connect(&mut self, site: String, target: Option<Target>) {
         let endpoint = self
             .routes
             .get(&site)
@@ -482,6 +573,7 @@ impl Viewer {
         self.saved_fields.clear();
         self.home = None;
         self.page_id = None;
+        self.shown_path = None;
         self.blocks.clear();
         self.title.clear();
         self.fields.clear();
@@ -489,46 +581,84 @@ impl Viewer {
         self.error.clear();
         self.failed = false;
         self.scroll_top = true;
-        self.target = page;
+        self.target = target;
         self.bootstrap();
     }
 
     fn go(&mut self, input: &str) {
-        let Some((site, page)) = parse_address(input, &self.routes, &self.site) else {
+        let Some((site, path)) = parse_address(input, &self.routes, &self.site) else {
             self.failed = true;
             self.error = "地址无效".to_string();
             self.pending_sync = true;
             return;
         };
         self.pending_sync = true;
+        self.failed = false;
+        self.error.clear();
         if site != self.site {
-            self.connect(site, page);
+            self.connect(site, Some(Target::Path(path)));
             return;
         }
-        match page {
-            Some(id) if self.page_id != Some(id) => {
-                self.failed = false;
-                self.error.clear();
-                self.navigate(id);
-            }
-            Some(_) => {}
-            None => self.reload(),
-        }
+        self.open_path(&path);
     }
 
     fn reload(&mut self) {
         self.error.clear();
         self.failed = false;
-        match self.page_id {
-            Some(id) => {
+        let path = self
+            .shown_path
+            .clone()
+            .or_else(|| self.page_id.and_then(|id| self.path_of(id)));
+        match path {
+            Some(path) => {
                 // Refresh the manifest first: static pages are cached by its
                 // hash, so F5 must see a republish before reusing the cache.
-                self.target = Some(id);
+                self.target = Some(Target::Path(path));
                 self.loading = true;
                 self.fetcher.manifest();
             }
             None => self.bootstrap(),
         }
+    }
+
+    fn resolve_path(&self, path: &str) -> Option<u16> {
+        resolve_path(&self.entries, self.home, path)
+    }
+
+    fn open_path(&mut self, path: &str) {
+        let path = normalize_path(path).unwrap_or_else(|| path.to_string());
+        self.shown_path = Some(path.clone());
+        if let Some(id) = self.resolve_path(&path) {
+            self.failed = false;
+            self.error.clear();
+            if self.page_id == Some(id) {
+                self.load(id);
+            } else {
+                self.navigate(id);
+            }
+            return;
+        }
+
+        // Old links and bookmarks may still name a page by number.
+        let bare = path.trim_start_matches('/');
+        if !bare.contains('/') {
+            if let Ok(id) = bare.parse::<u16>() {
+                if self.entries.iter().any(|e| e.id == id) {
+                    self.failed = false;
+                    self.error.clear();
+                    if self.page_id == Some(id) {
+                        self.load(id);
+                    } else {
+                        self.navigate(id);
+                    }
+                    return;
+                }
+            }
+        }
+
+        self.page_id = None;
+        self.loading = false;
+        self.fail(format!("404 · 没有 {path}"));
     }
 
     fn fail(&mut self, message: impl Into<String>) {
@@ -541,25 +671,24 @@ impl Viewer {
 
     fn load(&mut self, id: u16) {
         self.save_fields();
+        self.shown_path = self.path_of(id).or_else(|| Some(format!("/{id}")));
         if !self.entries.iter().any(|e| e.id == id) {
             self.loading = false;
             self.page_id = Some(id);
-            self.fail(format!("没有第 {id} 页"));
+            self.fail("页面不存在");
             return;
         }
         self.loading = true;
-        self.pending_page = Some(id);
         self.fetcher.page(id);
     }
 
     fn accept_page(&mut self, id: u16, text: Option<String>) {
         self.loading = false;
-        self.pending_page = None;
         match text {
             Some(text) => self.apply(id, &text),
             None => {
                 self.page_id = Some(id);
-                self.fail(format!("无法获取第 {id} 页"));
+                self.fail("页面加载失败");
             }
         }
     }
@@ -581,6 +710,7 @@ impl Viewer {
             })
             .unwrap_or_default();
         self.page_id = Some(id);
+        self.shown_path = self.path_of(id).or_else(|| Some(format!("/{id}")));
         self.fields = self.saved_fields.remove(&id).unwrap_or_default();
         self.form_target = None;
         self.failed = false;
@@ -618,11 +748,7 @@ impl Viewer {
     }
 
     fn home_page(&mut self) {
-        if let Some(home) = self.home {
-            if self.page_id != Some(home) {
-                self.navigate(home);
-            }
-        }
+        self.open_path("/");
     }
 
     fn save_fields(&mut self) {
@@ -646,7 +772,6 @@ impl Viewer {
         // start clean.
         self.saved_fields.remove(&target);
         self.loading = true;
-        self.pending_page = Some(target);
         self.fetcher.submit(target, fields);
     }
 
@@ -805,7 +930,10 @@ impl Viewer {
                         .link(RichText::new(text).size(17.0))
                         .clicked()
                     {
-                        self.navigate(target);
+                        match target {
+                            LinkTarget::Page(id) => self.navigate(id),
+                            LinkTarget::Path(path) => self.open_path(&path),
+                        }
                     }
                     ui.add_space(4.0);
                 }
@@ -952,8 +1080,6 @@ impl eframe::App for Viewer {
             self.forward();
         }
 
-        self.index_window(&ctx);
-
         egui::Panel::top("top").show(ui, |ui| {
             ui.add_space(4.0);
             ui.horizontal(|ui| {
@@ -998,7 +1124,7 @@ impl eframe::App for Viewer {
                         .font(egui::TextStyle::Monospace)
                         .desired_width(width)
                         .desired_rows(1)
-                        .hint_text("/页码"),
+                        .hint_text("nac.local/路径"),
                 );
                 if self.addr_focus {
                     resp.request_focus();
@@ -1009,14 +1135,6 @@ impl eframe::App for Viewer {
                     self.go(&input);
                 }
                 self.addr_typing = resp.has_focus();
-
-                if ui
-                    .add(egui::Button::new(RichText::new("索引").size(13.0)))
-                    .on_hover_text("列出本站所有页面")
-                    .clicked()
-                {
-                    self.show_index = true;
-                }
             });
             ui.add_space(4.0);
         });
@@ -1036,14 +1154,11 @@ impl eframe::App for Viewer {
                 let status = if !self.error.is_empty() {
                     self.error.clone()
                 } else if self.loading {
-                    match self.pending_page {
-                        Some(id) => format!("{} · 正在取第 {id} 页…", self.site),
-                        None => format!("{} · 正在连接…", self.site),
-                    }
+                    format!("{} · 正在加载…", self.address_text())
                 } else if self.failed {
-                    format!("{} · 无法获取内容", self.site)
+                    format!("{} · 无法获取内容", self.address_text())
                 } else {
-                    format!("{} · 已连接", self.site)
+                    format!("{} · 已连接", self.address_text())
                 };
                 ui.label(RichText::new(status).weak().size(12.0));
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -1106,55 +1221,9 @@ impl eframe::App for Viewer {
     }
 }
 
-impl Viewer {
-    fn index_window(&mut self, ctx: &egui::Context) {
-        if !self.show_index {
-            return;
-        }
-        let entries = self.entries.clone();
-        let current = self.page_id;
-        let mut open = true;
-        let mut go_to = None;
-
-        egui::Window::new("站点索引")
-            .open(&mut open)
-            .resizable(false)
-            .default_width(380.0)
-            .show(ctx, |ui| {
-                if entries.is_empty() {
-                    ui.label(RichText::new("没有可显示的页面").weak());
-                    return;
-                }
-                for e in &entries {
-                    let mark = if Some(e.id) == current { "▸" } else { " " };
-                    let title = if e.title.is_empty() {
-                        "(无标题)"
-                    } else {
-                        e.title.as_str()
-                    };
-                    let kind = if e.dynamic { "  动态" } else { "" };
-                    let text = format!("{mark} {:<4}{title}{kind}", e.id);
-                    if ui
-                        .selectable_label(Some(e.id) == current, RichText::new(text).size(15.0))
-                        .clicked()
-                    {
-                        go_to = Some(e.id);
-                    }
-                }
-            });
-
-        if let Some(id) = go_to {
-            self.show_index = false;
-            self.navigate(id);
-        } else if !open {
-            self.show_index = false;
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{parse_address, routes, stash_fields};
+    use super::{net, normalize_path, parse_address, resolve_path, routes, stash_fields};
     use std::collections::HashMap;
 
     #[test]
@@ -1184,19 +1253,69 @@ mod tests {
         let r = sites();
         assert_eq!(
             parse_address("/7", &r, "home"),
-            Some(("home".to_string(), Some(7)))
+            Some(("home".to_string(), "/7".to_string()))
         );
         assert_eq!(
             parse_address("7", &r, "home"),
-            Some(("home".to_string(), Some(7)))
+            Some(("home".to_string(), "/7".to_string()))
         );
         assert_eq!(
             parse_address("/", &r, "home"),
-            Some(("home".to_string(), None))
+            Some(("home".to_string(), "/".to_string()))
         );
         assert_eq!(
-            parse_address("  /12  ", &r, "home"),
-            Some(("home".to_string(), Some(12)))
+            parse_address("  /about/  ", &r, "home"),
+            Some(("home".to_string(), "/about/".to_string()))
+        );
+        assert_eq!(
+            parse_address("about", &r, "home"),
+            Some(("home".to_string(), "/about".to_string()))
+        );
+        assert_eq!(
+            parse_address("/a//b/.", &r, "home"),
+            Some(("home".to_string(), "/a/b".to_string()))
+        );
+    }
+
+    fn entry(id: u16, path: &str) -> net::Entry {
+        net::Entry {
+            id,
+            dynamic: false,
+            hash: 0,
+            title: String::new(),
+            path: path.to_string(),
+        }
+    }
+
+    #[test]
+    fn paths_resolve_directories_and_404() {
+        let entries = vec![entry(1, "/"), entry(2, "/notes/"), entry(3, "/notes/a")];
+        assert_eq!(resolve_path(&entries, Some(1), "/"), Some(1));
+        assert_eq!(resolve_path(&entries, Some(1), "/notes"), Some(2));
+        assert_eq!(resolve_path(&entries, Some(1), "/notes/"), Some(2));
+        assert_eq!(resolve_path(&entries, Some(1), "/notes/a"), Some(3));
+        assert_eq!(resolve_path(&entries, Some(1), "/missing"), None);
+        assert_eq!(normalize_path("//a/./b/").as_deref(), Some("/a/b/"));
+    }
+
+    #[test]
+    fn domains_select_the_site_and_path() {
+        let r = sites();
+        assert_eq!(
+            parse_address("nac.local/", &r, "home"),
+            Some(("home".to_string(), "/".to_string()))
+        );
+        assert_eq!(
+            parse_address("nac.local/about", &r, "home"),
+            Some(("home".to_string(), "/about".to_string()))
+        );
+        assert_eq!(
+            parse_address("home.nac.local/about", &r, "home"),
+            Some(("home".to_string(), "/about".to_string()))
+        );
+        assert_eq!(
+            parse_address("archive.nac.local/3", &r, "home"),
+            Some(("archive".to_string(), "/3".to_string()))
         );
     }
 
@@ -1205,15 +1324,15 @@ mod tests {
         let r = sites();
         assert_eq!(
             parse_address("archive/3", &r, "home"),
-            Some(("archive".to_string(), Some(3)))
+            Some(("archive".to_string(), "/3".to_string()))
         );
         assert_eq!(
             parse_address("nac://archive/3", &r, "home"),
-            Some(("archive".to_string(), Some(3)))
+            Some(("archive".to_string(), "/3".to_string()))
         );
         assert_eq!(
             parse_address("archive", &r, "home"),
-            Some(("archive".to_string(), None))
+            Some(("archive".to_string(), "/".to_string()))
         );
     }
 
@@ -1222,7 +1341,7 @@ mod tests {
         let r = sites();
         assert_eq!(parse_address("127.0.0.1:7000/1", &r, "home"), None);
         assert_eq!(parse_address("example.test", &r, "home"), None);
-        assert_eq!(parse_address("/abc", &r, "home"), None);
-        assert_eq!(parse_address("/70000", &r, "home"), None);
+        assert_eq!(parse_address("example.test/about", &r, "home"), None);
+        assert_eq!(parse_address("/../secret", &r, "home"), None);
     }
 }

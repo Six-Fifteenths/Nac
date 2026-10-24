@@ -1,4 +1,5 @@
 # nac:title 运营台 · 发布
+# nac:path /publish
 # 点一下就在服务器上跑 publish：校验全部页面，通过了才切换新一代。
 
 import os
@@ -68,6 +69,6 @@ nac.button("发布")
 nac.gap()
 nac.p(nac.i("校验在你按下按钮的那一秒完成：页面语法错、.page 残留、图片缺失都会当场失败，旧的一代继续服务。"))
 nac.gap()
-nac.link(1, "回概览")
+nac.link_path("/", "回概览")
 
 nac.done()

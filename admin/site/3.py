@@ -1,4 +1,5 @@
 # nac:title 运营台 · 数据
+# nac:path /data
 # 看站点私有目录里有什么，按行号删留言。所有路径都由 NAC_ROOT 推出来。
 
 import os
@@ -56,6 +57,6 @@ else:
     nac.p("空。")
 nac.gap()
 
-nac.link(1, "回概览")
+nac.link_path("/", "回概览")
 
 nac.done()

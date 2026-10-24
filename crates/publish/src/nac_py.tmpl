@@ -9,7 +9,7 @@ B. 文本与转义      esc, b, i, tt
 C. 块级排版        h1 h2 h3, p, quote, bullets, code, gap, raw
 D. 布局            cols, col
 E. 媒体            img
-F. 导航            link, redirect, first_page
+F. 导航            link, link_path, redirect, first_page
 G. 表单            form, field, password, button
 H. 请求            request, fields, field_of, page_id
 I. 会话            session, save_session, session_get, session_set
@@ -184,6 +184,14 @@ def link(page, text):
     page = int(page)
     if page in PAGES:
         _buf.append("[[%d|%s]]" % (page, _cell(text)))
+
+
+def link_path(path, text):
+    """指向路径；目录用带尾斜杠的路径（如 /notes/）。"""
+    path = str(path).strip()
+    if not path.startswith("/"):
+        path = "/" + path
+    _buf.append("[[path:%s|%s]]" % (path, _cell(text)))
 
 
 def redirect(page):

@@ -31,6 +31,8 @@ struct PageDef {
     title: String,
     hash: String,
     file: String,
+    #[serde(default)]
+    path: Option<String>,
 }
 
 #[derive(serde::Deserialize, Clone)]
@@ -309,6 +311,11 @@ fn handle<S: Read + Write>(mut stream: S, state: Arc<State>) -> std::io::Result<
                     dynamic: p.kind == "dynamic",
                     hash: u64::from_str_radix(&p.hash, 16).unwrap_or(0),
                     title: p.title.clone(),
+                    path: p
+                        .path
+                        .clone()
+                        .filter(|path| !path.is_empty())
+                        .unwrap_or_else(|| format!("/{}", p.id)),
                 })
                 .collect();
             entries.sort_by_key(|e| e.id);

@@ -12,6 +12,7 @@ pub struct Entry {
     pub dynamic: bool,
     pub hash: u64,
     pub title: String,
+    pub path: String,
 }
 
 pub struct Client {
@@ -65,6 +66,7 @@ impl Client {
                         dynamic: e.dynamic,
                         hash: e.hash,
                         title: e.title,
+                        path: e.path,
                     })
                     .collect())
             }

@@ -1,4 +1,5 @@
 # nac:title 并排排版
+# nac:path /layout
 # nac:static
 # 演示 nac.cols()：同一个页面里做分栏。
 # 不写 nac.col() 时按块数平均切；写了就按你指定的位置切。
@@ -39,6 +40,6 @@ with nac.cols(2):
     nac.p("丁")
 
 nac.gap()
-nac.link(1, "回首页")
+nac.link_path("/", "回首页")
 
 nac.done()

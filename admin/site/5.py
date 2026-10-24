@@ -1,4 +1,5 @@
 # nac:title 运营台 · 访问统计
+# nac:path /stats
 # 读 contentd --log 写出的 JSONL，在浏览器... 不，在 viewer 里看汇总。
 # 日志是追加写的，这里只读不改。
 
@@ -11,11 +12,21 @@ from pathlib import Path
 import nac
 
 log_path = os.environ.get("NAC_LOG")
+root = Path(os.environ.get("NAC_ROOT") or ".")
+page_paths = {}
+try:
+    gen = (root / "data" / "current").read_text(encoding="utf-8").strip()
+    manifest = json.loads((root / "data" / "gen" / gen / "manifest.json").read_text(encoding="utf-8"))
+    for page in manifest.get("pages", []):
+        page_paths[int(page["id"])] = page.get("path") or "/%s" % page["id"]
+except Exception:
+    pass
+
 nac.h1("访问统计")
 
 if not log_path:
     nac.quote("没有配置 NAC_LOG：启动运营台时加 --env NAC_LOG=/path/to/access.jsonl")
-    nac.link(1, "回概览")
+    nac.link_path("/", "回概览")
     nac.done()
     raise SystemExit(0)
 
@@ -23,7 +34,7 @@ path = Path(log_path)
 if not path.exists():
     nac.quote("日志文件还不存在：" + str(path))
     nac.p("公开站点要用 --log 启动一次才会产生访问记录。")
-    nac.link(1, "回概览")
+    nac.link_path("/", "回概览")
     nac.done()
     raise SystemExit(0)
 
@@ -61,7 +72,7 @@ with open(path, "r", encoding="utf-8", errors="replace") as fh:
             sessions.add(sess)
         ms = int(row.get("ms") or 0)
         if ms > slowest[0]:
-            slowest = (ms, "%s · 第 %s 页" % (time.strftime("%m-%d %H:%M", time.localtime(stamp)), page))
+            slowest = (ms, "%s · %s" % (time.strftime("%m-%d %H:%M", time.localtime(stamp)), page_paths.get(page, "/%s" % page)))
 
 nac.p("今天 ", nac.b(today_total), " 次请求；累计 ", nac.b(total), " 次；独立会话 ", nac.b(len(sessions)))
 if slowest[0]:
@@ -81,10 +92,10 @@ nac.gap()
 nac.h2("被看得最多的页")
 if pages:
     for page_id, count in pages.most_common(10):
-        nac.bullets("第 %d 页：%d 次" % (page_id, count))
+        nac.bullets("%s：%d 次" % (page_paths.get(page_id, "/%d" % page_id), count))
 else:
     nac.p("还没有成功的取页记录。")
 nac.gap()
 
-nac.link(1, "回概览")
+nac.link_path("/", "回概览")
 nac.done()

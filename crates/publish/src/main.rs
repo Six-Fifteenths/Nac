@@ -9,7 +9,7 @@
 //! The tool bakes the page/image tables into `nac.py`, checks that every
 //! script parses, and refuses to publish a broken generation.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -19,6 +19,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 mod images;
 
 const NAC_PY: &str = include_str!("nac_py.tmpl");
+
+struct PageSource {
+    rel: String,
+    url: String,
+    text: String,
+}
 
 fn main() {
     let mut site = PathBuf::from("site");
@@ -47,7 +53,15 @@ fn run(site: &Path, data: &Path, archive: Option<&Path>) -> Result<(), String> {
     let mut files = Vec::new();
     walk(site, &mut files)?;
 
-    let mut pages: BTreeMap<u16, PathBuf> = BTreeMap::new();
+    struct PageFile {
+        rel: String,
+        url: String,
+        text: String,
+        explicit_id: Option<u16>,
+    }
+    let mut page_files: Vec<PageFile> = Vec::new();
+    let mut urls: BTreeSet<String> = BTreeSet::new();
+    let mut used_ids: BTreeSet<u16> = BTreeSet::new();
     let mut images: Vec<(String, PathBuf)> = Vec::new();
 
     for path in files {
@@ -59,17 +73,30 @@ fn run(site: &Path, data: &Path, archive: Option<&Path>) -> Result<(), String> {
             .to_ascii_lowercase();
         match ext.as_str() {
             "py" => {
+                let text = fs::read_to_string(&path).map_err(|e| format!("{rel}: {e}"))?;
+                // Notepad 之类会存 BOM；Python 会因此报"非法字符"，先摘掉。
+                let text = text.strip_prefix('\u{feff}').unwrap_or(&text).to_string();
                 let stem = path
                     .file_stem()
                     .and_then(|s| s.to_str())
                     .unwrap_or("")
                     .to_string();
-                let id = stem
-                    .parse::<u16>()
-                    .map_err(|_| format!("{rel}: 页面文件名必须是页号（例如 7.py）"))?;
-                if pages.insert(id, path.clone()).is_some() {
-                    return Err(format!("{rel}: 页号 {id} 被用了两次"));
+                let url = page_url(site, &path, &text)?;
+                if !urls.insert(url.clone()) {
+                    return Err(format!("{rel}: 路径 {url} 被用了两次"));
                 }
+                let explicit_id = stem.parse::<u16>().ok();
+                if let Some(id) = explicit_id {
+                    if !used_ids.insert(id) {
+                        return Err(format!("{rel}: 页号 {id} 被用了两次"));
+                    }
+                }
+                page_files.push(PageFile {
+                    rel,
+                    url,
+                    text,
+                    explicit_id,
+                });
             }
             "page" => {
                 let stem = path
@@ -90,8 +117,27 @@ fn run(site: &Path, data: &Path, archive: Option<&Path>) -> Result<(), String> {
         }
     }
 
-    if pages.is_empty() {
-        return Err("site/ 里没有页面（需要 <页号>.py）".into());
+    if page_files.is_empty() {
+        return Err("site/ 里没有页面（需要 index.py 或 <名字>.py）".into());
+    }
+
+    page_files.sort_by(|a, b| a.url.cmp(&b.url));
+    let mut pages: BTreeMap<u16, PageSource> = BTreeMap::new();
+    for page in page_files {
+        let id = match page.explicit_id {
+            Some(id) => id,
+            None => allocate_page_id(&page.url, &used_ids)
+                .ok_or_else(|| format!("{}: 页号空间耗尽", page.rel))?,
+        };
+        used_ids.insert(id);
+        pages.insert(
+            id,
+            PageSource {
+                rel: page.rel,
+                url: page.url,
+                text: page.text,
+            },
+        );
     }
 
     // data 目录若在 site 里，上一代产物会被当成页面源文件扫进来。
@@ -181,12 +227,10 @@ fn run(site: &Path, data: &Path, archive: Option<&Path>) -> Result<(), String> {
     fs::write(gen_dir.join("scripts").join("nac.py"), helper).map_err(|e| e.to_string())?;
 
     let mut page_entries = Vec::new();
-    for (id, src) in &pages {
-        let text = fs::read_to_string(src).map_err(|e| format!("{}: {e}", src.display()))?;
-        // Notepad 之类会存 BOM；Python 会因此报"非法字符"，先摘掉。
-        let text = text.strip_prefix('\u{feff}').unwrap_or(&text).to_string();
-        check_syntax(&text, &rel_string(site, src))?;
-        let title = page_title(&text).unwrap_or_default();
+    for (id, page) in &pages {
+        let text = &page.text;
+        check_syntax(text, &page.rel)?;
+        let title = page_title(text).unwrap_or_default();
         let rel_file = format!("scripts/{id}.py");
         fs::write(gen_dir.join(&rel_file), text.as_bytes()).map_err(|e| e.to_string())?;
 
@@ -194,7 +238,11 @@ fn run(site: &Path, data: &Path, archive: Option<&Path>) -> Result<(), String> {
         if is_static {
             let body = render_static(&gen_dir.join("scripts"), *id, data)?;
             if body.len() > protocol::CHUNK {
-                return Err(format!("{id}.py: static output exceeds {} bytes", protocol::CHUNK));
+                return Err(format!(
+                    "{}: static output exceeds {} bytes",
+                    page.rel,
+                    protocol::CHUNK
+                ));
             }
             let static_file = format!("static/{id}.txt");
             fs::create_dir_all(gen_dir.join("static")).map_err(|e| e.to_string())?;
@@ -205,6 +253,7 @@ fn run(site: &Path, data: &Path, archive: Option<&Path>) -> Result<(), String> {
                 "title": title,
                 "hash": format!("{:016x}", protocol::fnv1a64(&body)),
                 "file": static_file,
+                "path": page.url,
             }));
         } else {
             page_entries.push(serde_json::json!({
@@ -213,6 +262,7 @@ fn run(site: &Path, data: &Path, archive: Option<&Path>) -> Result<(), String> {
                 "title": title,
                 "hash": format!("{:016x}", protocol::fnv1a64(text.as_bytes())),
                 "file": rel_file,
+                "path": page.url,
             }));
         }
     }
@@ -261,6 +311,101 @@ fn rel_string(base: &Path, path: &Path) -> String {
         .join("/")
 }
 
+fn page_url(site: &Path, path: &Path, text: &str) -> Result<String, String> {
+    let rel = rel_string(site, path);
+    if let Some(value) = text.lines().find_map(|line| {
+        let rest = line.trim().strip_prefix("# nac:path")?;
+        if rest.chars().next().map_or(true, char::is_whitespace) {
+            Some(rest.trim())
+        } else {
+            None
+        }
+    }) {
+        if value.is_empty() {
+            return Err(format!("{rel}: # nac:path 后面要写路径"));
+        }
+        let raw = if value.starts_with('/') {
+            value.to_string()
+        } else {
+            format!("/{value}")
+        };
+        return normalize_page_path(&raw).map_err(|e| format!("{rel}: {e}"));
+    }
+
+    let rel_path = path.strip_prefix(site).unwrap_or(path);
+    let stem = rel_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("");
+    let mut dirs: Vec<String> = Vec::new();
+    if let Some(parent) = rel_path.parent() {
+        for part in parent.components() {
+            let part = part.as_os_str().to_string_lossy();
+            if !part.is_empty() && part != "." {
+                dirs.push(part.to_string());
+            }
+        }
+    }
+    if stem == "index" {
+        let dir = dirs.join("/");
+        Ok(if dir.is_empty() {
+            "/".to_string()
+        } else {
+            format!("/{dir}/")
+        })
+    } else {
+        dirs.push(stem.to_string());
+        normalize_page_path(&format!("/{}", dirs.join("/")))
+    }
+}
+
+fn normalize_page_path(raw: &str) -> Result<String, String> {
+    if raw.len() > 1024 {
+        return Err("路径太长（上限 1024 字节）".into());
+    }
+    if !raw.starts_with('/') {
+        return Err("路径必须以 / 开头".into());
+    }
+    let mut parts = Vec::new();
+    for part in raw.split('/') {
+        if part.is_empty() || part == "." {
+            continue;
+        }
+        if part == ".." {
+            return Err("路径不能包含 ..".into());
+        }
+        if part
+            .chars()
+            .any(|c| c.is_control() || matches!(c, '?' | '#' | '|' | '\\' | '[' | ']'))
+        {
+            return Err(format!("路径里有不支持的字符：{part}"));
+        }
+        parts.push(part);
+    }
+    let mut out = format!("/{}", parts.join("/"));
+    if raw.ends_with('/') && out != "/" {
+        out.push('/');
+    }
+    Ok(out)
+}
+
+fn allocate_page_id(url: &str, used: &BTreeSet<u16>) -> Option<u16> {
+    const START: u32 = 1000;
+    const SPAN: u32 = u16::MAX as u32 - START + 1;
+    let mut id = START + (protocol::fnv1a64(url.as_bytes()) % SPAN as u64) as u32;
+    for _ in 0..SPAN {
+        let candidate = id as u16;
+        if !used.contains(&candidate) {
+            return Some(candidate);
+        }
+        id += 1;
+        if id >= START + SPAN {
+            id = START;
+        }
+    }
+    None
+}
+
 fn page_title(text: &str) -> Option<String> {
     text.lines()
         .map(|l| l.trim())
@@ -268,7 +413,7 @@ fn page_title(text: &str) -> Option<String> {
         .filter(|t| !t.is_empty())
 }
 
-fn page_list(pages: &BTreeMap<u16, PathBuf>) -> String {
+fn page_list(pages: &BTreeMap<u16, PageSource>) -> String {
     let ids: Vec<String> = pages.keys().map(|id| id.to_string()).collect();
     format!("({})", ids.join(", "))
 }
@@ -446,9 +591,53 @@ fn prune(data: &Path) {
 
 #[cfg(test)]
 mod tests {
-    use super::switch_current;
+    use super::{allocate_page_id, normalize_page_path, page_url, switch_current};
+    use std::collections::BTreeSet;
     use std::fs;
+    use std::path::Path;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn derives_paths_from_names_and_directories() {
+        let site = Path::new("site");
+        assert_eq!(page_url(site, Path::new("site/index.py"), "").unwrap(), "/");
+        assert_eq!(page_url(site, Path::new("site/about.py"), "").unwrap(), "/about");
+        assert_eq!(
+            page_url(site, Path::new("site/blog/index.py"), "").unwrap(),
+            "/blog/"
+        );
+        assert_eq!(
+            page_url(site, Path::new("site/blog/post.py"), "").unwrap(),
+            "/blog/post"
+        );
+        assert_eq!(
+            page_url(site, Path::new("site/2.py"), "# nac:path /second").unwrap(),
+            "/second"
+        );
+        assert_eq!(
+            page_url(site, Path::new("site/2.py"), "# nac:path second/").unwrap(),
+            "/second/"
+        );
+    }
+
+    #[test]
+    fn page_paths_are_normalized_and_checked() {
+        assert_eq!(normalize_page_path("//a//b/.").unwrap(), "/a/b");
+        assert_eq!(normalize_page_path("/a/b/").unwrap(), "/a/b/");
+        assert!(normalize_page_path("/../x").is_err());
+        assert!(normalize_page_path("/a?b").is_err());
+        assert!(normalize_page_path("a/b").is_err());
+    }
+
+    #[test]
+    fn generated_ids_avoid_numeric_pages() {
+        let mut used = BTreeSet::new();
+        used.insert(1000);
+        let id = allocate_page_id("/about", &used).unwrap();
+        assert!((1000..=u16::MAX).contains(&id));
+        assert_ne!(id, 1000);
+        assert_eq!(allocate_page_id("/about", &used), Some(id));
+    }
 
     #[test]
     fn switches_current_and_leaves_no_temp_file() {
