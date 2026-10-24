@@ -10,6 +10,7 @@
 //! directly to a server must know where that server is, so anything stronger
 //! (relay, Tor) belongs to the transport layer, not here.
 
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 pub const FILE_NAME: &str = "nac.routes";
@@ -152,16 +153,8 @@ impl Routes {
                 return Some(PathBuf::from(path));
             }
         }
-        let mut candidates = Vec::new();
-        if let Ok(exe) = std::env::current_exe() {
-            if let Some(dir) = exe.parent() {
-                candidates.push(dir.join(FILE_NAME));
-                candidates.push(dir.join(EXAMPLE_NAME));
-            }
-        }
-        candidates.push(PathBuf::from(FILE_NAME));
-        candidates.push(PathBuf::from(EXAMPLE_NAME));
-        candidates.into_iter().find(|p| p.is_file())
+        let exe = std::env::current_exe().ok();
+        candidates(exe.as_deref()).into_iter().find(|p| p.is_file())
     }
 
     pub fn load(path: &Path) -> Option<Self> {
@@ -173,6 +166,30 @@ impl Routes {
             Some(routes)
         }
     }
+}
+
+/// Files to try, in order, for a viewer running at `exe`.
+///
+/// A dev build runs straight out of `target/<profile>/`, which never holds the
+/// file, so the workspace root above it is searched as well. A distributed
+/// build is not under `target/`, and nothing outside its own directory is
+/// treated as a workspace.
+fn candidates(exe: Option<&Path>) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    if let Some(dir) = exe.and_then(Path::parent) {
+        out.push(dir.join(FILE_NAME));
+        out.push(dir.join(EXAMPLE_NAME));
+        let target = dir.parent();
+        if target.and_then(Path::file_name) == Some(OsStr::new("target")) {
+            if let Some(root) = target.and_then(Path::parent) {
+                out.push(root.join(FILE_NAME));
+                out.push(root.join(EXAMPLE_NAME));
+            }
+        }
+    }
+    out.push(PathBuf::from(FILE_NAME));
+    out.push(PathBuf::from(EXAMPLE_NAME));
+    out
 }
 
 fn with_default_port(endpoint: String) -> String {
@@ -250,6 +267,21 @@ mod tests {
             let token = encode(text);
             assert_eq!(decode(&token).as_deref(), Some(text), "token={token}");
         }
+    }
+
+    #[test]
+    fn dev_build_finds_routes_at_the_workspace_root() {
+        let dirs = candidates(Some(Path::new("/repo/target/release/viewer.exe")));
+        assert!(dirs.contains(&PathBuf::from("/repo/nac.routes")), "{dirs:?}");
+        assert!(dirs.contains(&PathBuf::from("/repo/target/release/nac.routes")));
+    }
+
+    #[test]
+    fn distributed_build_looks_no_further_than_its_own_directory() {
+        let dirs = candidates(Some(Path::new("/opt/nac/viewer.exe")));
+        assert!(dirs.contains(&PathBuf::from("/opt/nac/nac.routes")));
+        assert!(!dirs.contains(&PathBuf::from("/opt/nac.routes")), "{dirs:?}");
+        assert!(!dirs.contains(&PathBuf::from("/nac.routes")));
     }
 
     #[test]

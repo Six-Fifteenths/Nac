@@ -115,7 +115,7 @@ console MTI3LjAuMC4xOjcwMDE=   tls
 - `ssh=用户@服务器`：只有 `--features admin` 构建的管理员版才认这个标记，它自己拉起
   `ssh -N -L <端口>:<主机>:<端口>`。分发版不编译这段代码，所以普通用户拿到 exe 也没有
   任何可以启动子进程的能力。
-- 查找顺序：`--routes` → `NAC_ROUTES` → **可执行文件同目录** → 当前目录 → 同名 `.example`。
+- 查找顺序：`--routes` → `NAC_ROUTES` → **可执行文件同目录** → 若 exe 在 `target/<profile>/` 里则再加**仓库根** → 当前目录 → 同名 `.example`。
 - 地址栏语法：`nac.local/`、`nac.local/about`、`/about`、`about`、`名字.nac.local/about`；旧的 `名字/7`、`nac://名字/7` 仍按内部页号解析；**真实主机地址被拒绝**。
 
 这是遮掩，不是加密：客户端要直连就必须知道端点，能翻文件的人总能拿到。
