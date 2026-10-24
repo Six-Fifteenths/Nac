@@ -11,6 +11,7 @@
 
 use std::collections::BTreeMap;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -191,7 +192,7 @@ fn run(site: &Path, data: &Path, archive: Option<&Path>) -> Result<(), String> {
     )
     .map_err(|e| e.to_string())?;
 
-    fs::write(data.join("current"), gen.as_bytes()).map_err(|e| e.to_string())?;
+    switch_current(&data, &gen)?;
 
     println!(
         "published {} ({} pages, {} images)",
@@ -290,6 +291,34 @@ fn check_syntax(text: &str, rel: &str) -> Result<(), String> {
     Err(format!("{rel}: {detail}"))
 }
 
+
+fn switch_current(data: &Path, gen: &str) -> Result<(), String> {
+    let tmp = data.join(".current.tmp");
+    let current = data.join("current");
+    {
+        let mut file = fs::File::create(&tmp).map_err(|e| e.to_string())?;
+        file.write_all(gen.as_bytes()).map_err(|e| e.to_string())?;
+        file.sync_all().map_err(|e| e.to_string())?;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&tmp, fs::Permissions::from_mode(0o660));
+    }
+    #[cfg(windows)]
+    {
+        let _ = fs::remove_file(&current);
+    }
+    fs::rename(&tmp, &current).map_err(|e| e.to_string())?;
+    #[cfg(unix)]
+    {
+        if let Ok(dir) = fs::File::open(data) {
+            let _ = dir.sync_all();
+        }
+    }
+    Ok(())
+}
+
 fn next_gen_name(data: &Path) -> Result<String, String> {
     let secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -322,5 +351,29 @@ fn prune(data: &Path) {
     while gens.len() > 5 {
         let (name, _) = gens.remove(0);
         let _ = fs::remove_dir_all(gen_root.join(name));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::switch_current;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn switches_current_and_leaves_no_temp_file() {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("nac-current-{}-{stamp}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("current"), b"old").unwrap();
+
+        switch_current(&dir, "new").unwrap();
+
+        assert_eq!(fs::read_to_string(dir.join("current")).unwrap(), "new");
+        assert!(!dir.join(".current.tmp").exists());
+        fs::remove_dir_all(dir).ok();
     }
 }

@@ -52,7 +52,7 @@
 | 部署 | ✅ `deploy/install.sh` + 两个 systemd unit |
 | 传输层匿名性 | ⬜ **未做**：直连即暴露服务器 IP |
 
-测试：`cargo test --workspace`（23 项）。
+测试：`cargo test --workspace`（27 项）。
 
 ---
 

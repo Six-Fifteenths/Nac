@@ -34,12 +34,12 @@ sudo ./deploy/install.sh
 
 `install.sh` 做的事（幂等，可以反复跑）：
 
-1. 建系统用户 `nac`（`nologin`，家目录指向 `/srv/nac`）
+1. 建 `nac-share` 组与 `nac-public` / `nac-console` 两个 `nologin` 用户（公开数据组共享）
 2. 装 `contentd`、`publish` 到 `/srv/nac/bin`
-3. 同步 `site/` → `/srv/nac/site`、`admin/site/` → `/srv/nac/admin/site`
-4. 以 `nac` 身份发布两套站点（`--archive` 给公开站点）
+3. 同步 `site/` → `/srv/nac/site`、`admin/site/` → `/srv/nac/admin/site`（`--keep-site` 时保留现有）
+4. 以各自用户发布两套站点（公开站 `--archive`）
 5. 把 `deploy/*.service` 里的 `/srv/nac` 替换成 `--dest` 指定目录后装进 `/etc/systemd/system`
-6. `systemctl enable --now nac-contentd nac-console`
+6. `systemctl enable` + `restart nac-contentd nac-console`
 7. 自检：`is-active`、`ss -ltnp`、用一个裸帧向 7000 取一次 manifest
 
 参数：
@@ -47,25 +47,18 @@ sudo ./deploy/install.sh
 | 参数 | 默认 | 说明 |
 |---|---|---|
 | `--dest` | `/srv/nac` | 安装目录 |
-| `--user` | `nac` | 以哪个用户跑服务 |
+| `--public-user` | `nac-public` | 公开站运行用户 |
+| `--console-user` | `nac-console` | 运营台运行用户（必须不同于公开用户）|
+| `--group` | `nac-share` | 公开数据共享组 |
 | `--from` | `target/release` | 二进制来源目录 |
+| `--keep-site` | 关 | 保留现有 `site/` 与 `admin/site/`，不从仓库覆盖 |
 | `--bind-public` | 关 | 公开站点改绑 `0.0.0.0`，**会暴露服务器 IP** |
 
 ### 2.2 手工步骤（脚本看不懂时对照）
 
-```bash
-sudo useradd -r -s /usr/sbin/nologin -d /srv/nac nac
-sudo mkdir -p /srv/nac/bin /srv/nac/admin
-sudo install -m 0755 target/release/contentd target/release/publish /srv/nac/bin/
-sudo cp -r site /srv/nac/site
-sudo cp -r admin/site /srv/nac/admin/site
-sudo chown -R nac:nac /srv/nac
-sudo -u nac /srv/nac/bin/publish --site /srv/nac/site --data /srv/nac/data --archive /srv/nac/archive
-sudo -u nac /srv/nac/bin/publish --site /srv/nac/admin/site --data /srv/nac/admin/data
-sudo cp deploy/nac-contentd.service deploy/nac-console.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now nac-contentd nac-console
-```
+手工步骤与 `install.sh` 一致：创建 `nac-share`、`nac-public`、`nac-console`，按 §5.0
+的权限表设置目录，分别用对应用户执行 `publish`，再安装两个 unit。步骤较多，建议直接用
+`install.sh`，避免漏掉属主/组/umask。
 
 ---
 
@@ -145,14 +138,15 @@ console MTI3LjAuMC4xOjcwMDE=
 
 - `contentd` 检测到真实 UID 是 0 时**直接退出**（退出码 3），不再只是警告；
   确实需要时才加 `--allow-root`。
-- 两个 unit 都写了 `User=nac`，安装后这样确认：
+- 两个 unit 分别写 `User=nac-public`（公开）与 `User=nac-console`（运营台），安装后这样确认：
 
   ```bash
-  systemctl show -p User --value nac-contentd   # 应为 nac
-  ps -o user= -C contentd                        # 应为 nac
+  systemctl show -p User --value nac-contentd   # 应为 nac-public
+  systemctl show -p User --value nac-console    # 应为 nac-console
+  ps -o user= -C contentd                        # 两行，分别是 nac-public / nac-console
   ```
 
-- `nac` 用户是 `nologin`、无 sudo、无 SSH key。这是"页面代码拿不到 root"的第一层。
+- 两个用户都是 `nologin`、无 sudo、无 SSH key；共享数据通过 `nac-share` 组。
 
 第二层是 unit 里的沙箱（两家共用）：
 
@@ -165,21 +159,21 @@ console MTI3LjAuMC4xOjcwMDE=
 | `ProtectSystem=strict` | 整个文件系统只读，只有下面列出的目录可写 |
 | `ProtectHome=yes` / `PrivateTmp=yes` / `PrivateDevices=yes` | 看不到家目录，私有 `/tmp`，无设备节点 |
 | `ProtectKernelTunables/Modules/ControlGroups=yes` | 内核与 cgroup 不可写 |
-| `UMask=0077` | 会话文件只有属主可读 |
+| `UMask=0007` | 新文件属主/组可读写，其他用户不可读（运营台需组读）|
 
 **两个服务各自能碰的目录**（这是"一次部署只给一个局部文件夹"的具体落地）：
 
-| | `nac-contentd`（公开，7000） | `nac-console`（运营台，7001） |
+| | `nac-contentd`（公开，7000，`nac-public`） | `nac-console`（运营台，7001，`nac-console`） |
 |---|---|---|
-| 可写 | `data/`（含 `data/access.jsonl`）、`archive/` | `admin/data/`、`data/`、`archive/` |
-| 只读 | `bin/`、`site/` | `bin/`、`site/`、`admin/site/` |
-| 完全不可见 | **`admin/`**（`InaccessiblePaths`） | — |
+| 可写 | `data/state/`、`data/appdata/`、`data/access.jsonl` | `admin/data/`、`data/`、`archive/` |
+| 只读 | `bin/`、`site/`、`data/gen/`、`data/current` | `bin/`、`site/`、`admin/site/` |
+| 完全不可见 | **`admin/`**（`InaccessiblePaths` + 不同 UID） | — |
 
 几点值得注意：
 
-- 公开站点的页面脚本**读不到**运营台的源码与数据（不是"不能写"，是看不到）。
+- 公开站点的页面脚本**读不到**运营台的源码与数据（不是"不能写"，是看不到）；现在两个服务是不同 UID，`/proc/<pid>/root` 也跨不过去。
 - 两边都**写不了** `site/` 与 `admin/site/`：页面脚本改不动内容源文件。改内容走 `git pull` 或你自己 ssh 编辑，然后 `publish`。
-- `data/access.jsonl` 放在 `data/` 里而不是 `/srv/nac/` 根下，就是为了让可写范围收敛成一个目录，不必为单个文件开例外。
+- `data/access.jsonl` 是公开站唯一的单文件可写例外；`data/gen/` 与 `data/current` 对公开服务只读，发布/回滚只能由运营台或手工 publish。
 - 运营台必须能写 `data/`，否则"发布"按钮失效。它因此比公开站点多一份权限——这是**运营台只监听回环**的原因。
 
 从旧版本升级上来时，`/srv/nac/access.jsonl` 会留在原地不再写入；确认新日志正常后可以删掉它。
@@ -188,11 +182,7 @@ console MTI3LjAuMC4xOjcwMDE=
 `ProcSubset` 需要 systemd 247+；当前部署为 systemd 257，已启用。更老的系统上 unit 会加载失败，
 `install.sh` 会检测版本并提示。`ProtectHostname` / `ProtectClock` 仍作为可选注释保留。
 
-注意：`InaccessiblePaths` 只隐藏直接路径；`ProtectProc` 只能对**其他用户**隐藏进程，同 UID 的
-另一个服务仍可通过 `/proc/<pid>/root` 进入它的挂载命名空间。`SystemCallFilter=~@debug` 禁用了
-ptrace/process_vm（防调试注入），但不阻止 `openat`。因此当前模型能阻止公开页面直接读取运营台
-源码/数据和 ptrace，但不能阻止同 UID 的 `/proc` 逃逸；要做强隔离，最终应把公开站与运营台拆成
-不同系统用户（公开站数据用组权限共享给运营台发布）。
+注意：`InaccessiblePaths` 只隐藏直接路径；`ProtectProc` 只能对**其他用户**隐藏进程。当前已把公开站与运营台拆成不同 UID，`/proc/<pid>/root` 跨用户访问被内核拒绝（实测）；`SystemCallFilter=~@debug` 再挡 ptrace/process_vm。保留 `InaccessiblePaths` 作为直接路径防护。
 
 ### 5.1 逐项检查
 
@@ -281,7 +271,7 @@ sudo ./deploy/install.sh        # 会重新装二进制、同步源码、重新�
 | 发布报 `SyntaxError` | 就是那一页的 Python 语法错，按提示的行号改 |
 | 图片不显示 | `nac.img()` 路径要和 `site/` 下一致；`journalctl` 里会有 `KeyError` |
 | 运营台打不开 | 隧道是否建好；`nac.routes` 里有没有 `console`；7001 是否 active |
-| 日志不增长 | `contentd` 启动时有没有给 `--log`；unit 里路径是否可写（属主 `nac`） |
+| 日志不增长 | `contentd` 启动时有没有给 `--log`；unit 里路径是否可写（属主 `nac-public`） |
 | 会话文件暴涨 | 检查 `--session-ttl-hours`；每个新客户端一个文件，属正常 |
 
 定位 Python 页面问题最直接的方式：在服务器上手动跑一次

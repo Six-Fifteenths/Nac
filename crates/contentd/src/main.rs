@@ -8,7 +8,7 @@ use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -21,6 +21,7 @@ use protocol::{
 const PY_TIMEOUT: Duration = Duration::from_secs(2);
 const PY_MAX_OUTPUT: usize = 128 * 1024;
 const READ_TIMEOUT: Duration = Duration::from_secs(5);
+const MAX_CONNECTIONS: usize = 32;
 
 #[derive(serde::Deserialize, Clone)]
 struct PageDef {
@@ -199,15 +200,26 @@ fn main() {
     };
     eprintln!("contentd listening on {addr}");
 
+    let active = Arc::new(AtomicUsize::new(0));
     for conn in listener.incoming() {
         match conn {
             Ok(stream) => {
+                if active.fetch_add(1, Ordering::Relaxed) >= MAX_CONNECTIONS {
+                    active.fetch_sub(1, Ordering::Relaxed);
+                    drop(stream);
+                    continue;
+                }
                 let st = state.clone();
-                thread::spawn(move || {
+                let active_thread = active.clone();
+                if let Err(e) = thread::Builder::new().spawn(move || {
                     if let Err(e) = handle(stream, st) {
                         eprintln!("connection: {e}");
                     }
-                });
+                    active_thread.fetch_sub(1, Ordering::Relaxed);
+                }) {
+                    active.fetch_sub(1, Ordering::Relaxed);
+                    eprintln!("spawn: {e}");
+                }
             }
             Err(e) => eprintln!("accept: {e}"),
         }

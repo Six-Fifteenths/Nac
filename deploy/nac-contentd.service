@@ -4,8 +4,9 @@ After=network.target
 
 [Service]
 Type=simple
-User=nac
-Group=nac
+User=nac-public
+Group=nac-public
+SupplementaryGroups=nac-share
 WorkingDirectory=/srv/nac
 # 只监听回环：对外的入口是隧道或中继，不是这个端口。
 # 页面脚本由本服务启动，所以这一节的沙箱就是"页面代码能碰什么"的边界。
@@ -27,10 +28,10 @@ LockPersonality=yes
 RestrictNamespaces=yes
 
 # --- 文件系统：只读 + 仅有的可写范围 ---
-# 公开站点只能写自己的 data/（含 access.jsonl）与 archive/，改不动 bin/、site/、admin/。
+# 公开站点只写 state/、appdata/ 与日志；gen/ 与 current 只读，archive/ 不开放。
 ProtectSystem=strict
-ReadWritePaths=/srv/nac/data -/srv/nac/archive
-# 运营台的源码与数据对它完全不可见：公开页面被攻破也读不到控制台。
+ReadWritePaths=/srv/nac/data/state /srv/nac/data/appdata /srv/nac/data/access.jsonl
+# 运营台的源码与数据对它完全不可见；不同 UID 也阻断 /proc/<pid>/root。
 InaccessiblePaths=/srv/nac/admin
 ProtectHome=yes
 PrivateTmp=yes
@@ -38,9 +39,12 @@ PrivateDevices=yes
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
 ProtectControlGroups=yes
-# 会话文件默认只有属主可读。
-UMask=0077
-# systemd 257：对其他用户隐藏进程；同 UID 仍可经 /proc/<pid>/root 访问，强隔离需拆用户。
+# 会话/appdata 需组读，运营台才能看留言与统计。
+UMask=0007
+MemoryMax=256M
+TasksMax=128
+LimitNOFILE=1024
+# systemd 257：对其他用户隐藏进程；不同 UID 已阻断 /proc/<pid>/root。
 ProtectProc=invisible
 ProcSubset=pid
 SystemCallFilter=~@debug

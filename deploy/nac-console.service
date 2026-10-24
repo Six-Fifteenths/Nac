@@ -4,8 +4,9 @@ After=network.target
 
 [Service]
 Type=simple
-User=nac
-Group=nac
+User=nac-console
+Group=nac-console
+SupplementaryGroups=nac-share
 WorkingDirectory=/srv/nac
 # 运营台永远只监听 127.0.0.1；远程访问用 ssh -L，不在防火墙上开口。
 # 它要能写公开站点的 data/ 才能在页面里点"发布"，所以可写范围比公开站点多一份。
@@ -34,8 +35,11 @@ PrivateDevices=yes
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
 ProtectControlGroups=yes
-UMask=0077
-# systemd 257：对其他用户隐藏进程；同 UID 仍可经 /proc/<pid>/root 访问，强隔离需拆用户。
+UMask=0007
+MemoryMax=256M
+TasksMax=64
+LimitNOFILE=1024
+# systemd 257：对其他用户隐藏进程；不同 UID 已阻断 /proc/<pid>/root。
 ProtectProc=invisible
 ProcSubset=pid
 SystemCallFilter=~@debug
