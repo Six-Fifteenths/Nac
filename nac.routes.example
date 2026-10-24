@@ -1,7 +1,7 @@
 # nac 站点目录（示例）
 #
 # 复制成 nac.routes 再改。nac.routes 不进仓库，真正的端点只写在那里。
-# 用户只看到站点名和 /页码，看不到也输不进主机地址。
+# 用户只看到显示域名（nac.local）和路径，看不到也输不进主机地址。
 #
 # 生成一条：  viewer --routes-encode 你的主机:端口
 # 检查解码：  viewer --routes-check
@@ -15,5 +15,5 @@
 *home   MTI3LjAuMC4xOjcwMDA=
 
 # 运营台：在服务器上只监听 127.0.0.1:7001，用 ssh -L 7001:127.0.0.1:7001 转发过来。
-# 地址栏里输入 console/1 就切过去。
+# 地址栏里输入 console.nac.local/ 就切过去。
 console MTI3LjAuMC4xOjcwMDE=

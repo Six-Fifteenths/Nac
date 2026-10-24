@@ -10,8 +10,8 @@
 /srv/nac/
 ├─ bin/contentd              release 构建（strip + LTO + panic=abort）
 ├─ bin/publish               发布工具（运营台的"发布"按钮会调它）
-├─ site/                     公开站点的页面源码
-├─ admin/site/               运营台页面源码
+├─ site/                     公开站页面（index.py、子目录/index.py、*.py）
+├─ admin/site/               运营台页面（同样的路径规则）
 ├─ data/                     公开站点：current / gen/ / state/ / appdata/
 ├─ admin/data/               运营台自己的代与会话（与公开站点隔离）
 ├─ archive/                  原图归档（只有用 --archive 时才有）
@@ -120,7 +120,7 @@ Host nac
 console MTI3LjAuMC4xOjcwMDE=
 ```
 
-然后在客户端地址栏输 `console/1`。
+然后在客户端地址栏输 `console.nac.local/`（或直接输 `/`）。
 
 注意事项：
 
@@ -207,8 +207,8 @@ console MTI3LjAuMC4xOjcwMDE=
 
 7. `ssh -N -L 7001:127.0.0.1:7001 用户@服务器`
 8. `viewer --routes-check` → 应显示 `home` 与 `console`
-9. `console/1` 看概览、`console/5` 看访问统计（应能看到第 5 步产生的记录）
-10. 在运营台第 2 页点"发布"→ 公开站点立刻更新（**不需要重启服务**）
+9. `console.nac.local/` 看概览、`console.nac.local/stats` 看访问统计（应能看到第 5 步产生的记录）
+10. 在运营台 `/publish` 点"发布"→ 公开站点立刻更新（**不需要重启服务**）
 
 ---
 
@@ -216,11 +216,11 @@ console MTI3LjAuMC4xOjcwMDE=
 
 | 想做的事 | 做法 |
 |---|---|
-| 改内容 | 改 `site/*.py` → `sudo -u nac-public /srv/nac/bin/publish --site /srv/nac/site --data /srv/nac/data` |
+| 改内容 | 改 `site/**/*.py` → `sudo -u nac-public /srv/nac/bin/publish --site /srv/nac/site --data /srv/nac/data` |
 | 改完立刻生效吗 | 是。`contentd` 每次请求都重读 `data/current`，不用重启 |
 | 回滚 | 把 `data/current` 里的代名改成旧代（`data/gen/` 保留最近 5 代） |
 | 改运营台 | 改 `admin/site/*.py` → `publish --site admin/site --data admin/data` |
-| 看实时访问 | 运营台第 5 页，或 `tail -f data/access.jsonl` |
+| 看实时访问 | 运营台 `/stats`，或 `tail -f data/access.jsonl` |
 | 清空所有数据 | 停服务 → 删 `data/appdata/` → 起服务 |
 | 重启 | `sudo systemctl restart nac-contentd` |
 
@@ -276,8 +276,8 @@ sudo ./deploy/install.sh        # 会重新装二进制、同步源码、重新�
 |---|---|
 | 客户端"无法连接到服务器" | `systemctl is-active nac-contentd`；`ss -ltnp \| grep 7000`；`--bind` 是不是回环 |
 | 某页始终空白 | `journalctl -u nac-contentd -n 50` 有 Python 报错；页面是否超时 2 秒、输出超 128 KB、页面超 16 KB |
-| 改了内容没生效 | 有没有重新 `publish`；`cat data/current` 是不是新代；运营台第 1 页显示当前代 |
-| 发布报"页号被用了两次" | `data` 或 `archive` 目录落在 `site` 里面 |
+| 改了内容没生效 | 有没有重新 `publish`；`cat data/current` 是不是新代；运营台首页显示当前代 |
+| 发布报"路径被用了两次" | 两个页面路径相同，或 `data`/`archive` 落在 `site` 里面 |
 | 发布报 `SyntaxError` | 就是那一页的 Python 语法错，按提示的行号改 |
 | 图片不显示 | `nac.img()` 路径要和 `site/` 下一致；`journalctl` 里会有 `KeyError` |
 | 运营台打不开 | 隧道是否建好；客户端是否加了 `--plaintext --addr 127.0.0.1:17001`；7001 是否 active |

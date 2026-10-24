@@ -31,6 +31,7 @@ sudo ./deploy/install.sh --bind-public
 5. 安装并启动两个服务、健康检查 timer、每日备份 timer
 
 升级时用同样的命令；想保留服务器上改过的 `site/` 和 `admin/site/`，加 `--keep-site`。
+协议 v3 的清单带路径字段，服务端与客户端需一起升级。
 更细的目录/unit 说明见 [deploy.md](deploy.md)。
 
 ## 3. 两个服务
@@ -81,17 +82,35 @@ Windows 上运行同一个客户端，但加 `--plaintext` 指向隧道：
 .\NacViewer.exe --plaintext --addr 127.0.0.1:17001
 ```
 
-地址栏输入 `/1` 进入概览；第 2 页是“发布”，第 3 页看留言，第 5 页看访问统计。
+地址栏会显示 `console.nac.local/`；直接输入路径即可：
+
+| 路径 | 页面 |
+|---|---|
+| `/` | 概览 |
+| `/publish` | 发布新代 |
+| `/data` | 看数据 / 清留言 |
+| `/inventory` | 内容清单 |
+| `/stats` | 访问统计 |
 
 ## 6. 发布内容
 
-页面是 `site/*.py`，文件名就是页号：
+页面是 `site/` 下的 Python 文件，路径由文件名/目录决定：
+
+| 文件 | 地址 |
+|---|---|
+| `site/index.py` | `/` |
+| `site/about.py` | `/about` |
+| `site/notes/index.py` | `/notes/` |
+| `site/notes/a.py` | `/notes/a` |
+
+也可以写 `# nac:path /custom` 覆盖；同一路径只能有一个页面。
+页面之间用 `nac.link_path("/notes/", "笔记")` 链接。
 
 ```bash
 ./bin/publish --site site --data data --archive archive
 ```
 
-或在运营台第 2 页点“发布”。发布前会做语法检查；失败不会切换 `current`。
+或在运营台 `/publish` 点“发布”。发布前会做语法检查；失败不会切换 `current`。
 发布成功后 `contentd` 立即读新代，不需要重启。
 
 - 保留最近 5 代；回滚把 `data/current` 改成旧代名

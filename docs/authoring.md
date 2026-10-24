@@ -1,19 +1,26 @@
 # 页面编写手册
 
-一个页面 = 一个 Python 程序 = `site/<页号>.py`。
+一个页面 = 一个 Python 程序 = `site/` 下的一个 `.py` 文件。
 
 ```python
-# nac:title 白塔
+# nac:title 关于
+# nac:path /about
 import nac
 
-nac.h1("白塔")
-nac.p("第 3 号信标，仍然在广播。")
+nac.h1("关于")
+nac.p("这一页的地址是 nac.local/about。")
 nac.done()
 ```
 
-- **文件名就是页号**：`7.py` → 第 7 页，客户端地址 `/7`。页号是 `u16`，即 0–65535。
-- **页名**来自 `# nac:title <文字>`（放在文件靠前位置即可），`publish` 读走写进清单；
-  没有就留空，客户端显示"第 N 页"。
+- **路径由文件名和目录决定**：
+  - `site/index.py` → `/`
+  - `site/about.py` → `/about`
+  - `site/notes/index.py` → `/notes/`（目录首页）
+  - `site/notes/a.py` → `/notes/a`
+- 想用别的路径，在文件靠前位置写 `# nac:path /custom/path`；路径必须唯一。
+- 内部页号仍然存在（协议要用 `u16`），但**写页面时不要依赖它**：数字文件名保留自己的页号，
+  命名文件由 `publish` 分配稳定 id。页面之间请用 `nac.link_path()` 链接。
+- **页名**来自 `# nac:title <文字>`，`publish` 读走写进清单；没有就留空，客户端显示路径。
 - `import nac` 不需要安装：每代发布都会在 `scripts/` 里生成它。
 - `nac.done()` 输出页面。忘了写也没关系——进程退出时会自动输出已拼好的内容。
 
@@ -27,7 +34,7 @@ nac.done()
 
 | 名字 | 内容 |
 |---|---|
-| `nac.PAGES` | 本代所有页号，如 `(1, 2, 3, 7)` |
+| `nac.PAGES` | 本代所有内部页号，如 `(1, 2, 3, 7)`（一般不用） |
 | `nac.IMAGES` | 图片表，如 `{"img/plan.png": (1, 640, 360)}`（id, 宽, 高） |
 
 ### B. 文本与转义
@@ -68,9 +75,10 @@ nac.done()
 
 | 调用 | 说明 |
 |---|---|
-| `nac.link(page, text)` | 跳到另一页；页号不存在时整行不显示 |
+| `nac.link_path(path, text)` | 跳到路径；目录要带尾斜杠（如 `/notes/`） |
+| `nac.link(page, text)` | 按内部页号跳转；页号不存在时整行不显示 |
 | `nac.redirect(page)` | 立刻跳转，本页已拼的内容丢弃 |
-| `nac.first_page()` | 本代最小页号（做"回首页"用） |
+| `nac.first_page()` | 本代最小内部页号（一般用 `link_path("/")`） |
 
 ### G. 表单
 
@@ -238,7 +246,7 @@ with nac.cols(2):
 ## 5.5 静态页
 
 页面里加一行 `# nac:static`（放在标题附近即可），`publish` 会在发布时执行一次页面，
-把输出存到该代的 `static/<页号>.txt`。线上由 `contentd` 直接读文件，不再起 Python。
+把输出存到该代的 `static/<id>.txt`。线上由 `contentd` 直接读文件，不再起 Python。
 
 - 适合不依赖表单/会话/请求的页面
 - 输出同样受 16 KB 限制；执行失败会让整个发布失败
@@ -249,7 +257,8 @@ with nac.cols(2):
 
 | 情况 | 结果 |
 |---|---|
-| 文件名不是数字 | 报错，要求改成 `<页号>.py` |
+| 两个页面路径相同 | 报错，指出冲突的路径 |
+| `# nac:path` 为空或含 `..` / `?` / `|` 等字符 | 报错，指出文件与原因 |
 | 存在 `.page` 文件 | 报错并提示改名 |
 | Python 语法错 | 报错，带文件名与原因（`2.py: SyntaxError: '(' was never closed`） |
 | 文件带 BOM | 自动摘掉（Notepad 存的文件常见） |
@@ -257,6 +266,7 @@ with nac.cols(2):
 | `data` 或 `archive` 放在 `site` 里 | 报错（会把上一代产物/归档原件当成素材） |
 | 引用了不存在的图片路径 | 运行时 `nac.img()` 抛 `KeyError`，服务端返回 `EMPTY` 并在 stderr 记录 |
 | 引用了不存在的页号 | `nac.link()` 静默跳过，页面上不出现这个链接 |
+| 引用了不存在的路径 | `nac.link_path()` 仍会显示，点击后是 404 |
 
 发布失败时**旧的一代继续服务**，不会出现"发了一半"的状态：新代写完才原子更新 `data/current`。
 
