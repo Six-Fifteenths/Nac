@@ -19,7 +19,7 @@ mod tls;
 #[cfg(feature = "admin")]
 mod tunnel;
 
-use markup::{Block, Inline, LinkTarget};
+use markup::{Block, Inline, LinkTarget, NoteKind};
 
 fn main() -> eframe::Result<()> {
     let mut addr: Option<String> = std::env::var("NAC_ADDR").ok();
@@ -897,6 +897,14 @@ impl Viewer {
                         ..Default::default()
                     },
                 ),
+                Inline::Link { text, .. } => (
+                    text.clone(),
+                    TextFormat {
+                        font_id: FontId::new(size, family.clone()),
+                        color: Color32::from_rgb(40, 100, 190),
+                        ..Default::default()
+                    },
+                ),
             };
             job.append(&text, 0.0, fmt);
         }
@@ -940,6 +948,151 @@ impl Viewer {
         );
     }
 
+    /// Renders a run of inline content. When it contains links they become real
+    /// widgets and the text flows around them; otherwise it is one laid-out job.
+    fn render_flow(
+        &mut self,
+        ui: &mut egui::Ui,
+        parts: &[Inline],
+        size: f32,
+        color: Color32,
+        family: FontFamily,
+    ) {
+        if !parts.iter().any(|p| matches!(p, Inline::Link { .. })) {
+            ui.label(self.job(parts, size, color, family));
+            return;
+        }
+
+        let mut run: Vec<Inline> = Vec::new();
+        let mut clicked: Option<LinkTarget> = None;
+        ui.horizontal_wrapped(|ui| {
+            for part in parts {
+                match part {
+                    Inline::Link { target, text } => {
+                        if !run.is_empty() {
+                            let job = self.job(&run, size, color, family.clone());
+                            ui.label(job);
+                            run.clear();
+                        }
+                        if ui.link(RichText::new(text).size(size)).clicked() {
+                            clicked = Some(target.clone());
+                        }
+                    }
+                    other => run.push(other.clone()),
+                }
+            }
+            if !run.is_empty() {
+                let job = self.job(&run, size, color, family.clone());
+                ui.label(job);
+            }
+        });
+
+        if let Some(target) = clicked {
+            match target {
+                LinkTarget::Page(id) => self.navigate(id),
+                LinkTarget::Path(path) => self.open_path(&path),
+            }
+        }
+    }
+
+    fn render_table(
+        &mut self,
+        ui: &mut egui::Ui,
+        header: &[Vec<Inline>],
+        rows: &[Vec<Vec<Inline>>],
+    ) {
+        let columns = header.len().max(1);
+        let id = ui.next_auto_id();
+        egui::Grid::new(id)
+            .num_columns(columns)
+            .spacing([18.0, 8.0])
+            .striped(true)
+            .show(ui, |ui| {
+                for cell in header {
+                    ui.label(self.job(
+                        cell,
+                        15.5,
+                        Color32::from_gray(15),
+                        FontFamily::Name(Arc::from("bold")),
+                    ));
+                }
+                ui.end_row();
+                for row in rows {
+                    for index in 0..columns {
+                        match row.get(index) {
+                            Some(cell) => ui.label(self.job(
+                                cell,
+                                16.0,
+                                Color32::from_gray(28),
+                                FontFamily::Proportional,
+                            )),
+                            None => ui.label(""),
+                        };
+                    }
+                    ui.end_row();
+                }
+            });
+        ui.add_space(8.0);
+    }
+
+    fn render_note(
+        &mut self,
+        ui: &mut egui::Ui,
+        kind: NoteKind,
+        title: &[Inline],
+        body: Vec<Block>,
+    ) {
+        let (bar, fill) = match kind {
+            NoteKind::Info => (Color32::from_rgb(74, 132, 199), Color32::from_rgb(241, 246, 253)),
+            NoteKind::Ok => (Color32::from_rgb(64, 152, 101), Color32::from_rgb(241, 250, 244)),
+            NoteKind::Warn => (Color32::from_rgb(206, 156, 60), Color32::from_rgb(254, 250, 240)),
+            NoteKind::Danger => (Color32::from_rgb(198, 82, 82), Color32::from_rgb(253, 243, 243)),
+        };
+        let frame = egui::Frame::new()
+            .fill(fill)
+            .inner_margin(egui::Margin::symmetric(10, 8));
+        frame.show(ui, |ui| {
+            if !title.is_empty() {
+                ui.horizontal(|ui| {
+                    let (rect, _) =
+                        ui.allocate_exact_size(egui::vec2(4.0, 15.0), egui::Sense::hover());
+                    ui.painter().rect_filled(rect, 2.0, bar);
+                    ui.add_space(6.0);
+                    ui.label(self.job(
+                        title,
+                        16.0,
+                        bar,
+                        FontFamily::Name(Arc::from("bold")),
+                    ));
+                });
+                ui.add_space(4.0);
+            }
+            self.render_list(ui, body);
+        });
+        ui.add_space(8.0);
+    }
+
+    fn render_tabs(&mut self, ui: &mut egui::Ui, titles: &[String], bodies: Vec<Vec<Block>>) {
+        let id = ui.next_auto_id();
+        let mut selected = ui.data_mut(|d| *d.get_temp_mut_or_default::<usize>(id));
+        if selected >= titles.len() {
+            selected = 0;
+        }
+        ui.horizontal_wrapped(|ui| {
+            for (index, title) in titles.iter().enumerate() {
+                if ui.selectable_label(index == selected, title.as_str()).clicked() {
+                    selected = index;
+                }
+            }
+        });
+        ui.data_mut(|d| d.insert_temp(id, selected));
+        ui.add_space(6.0);
+        if let Some(body) = bodies.into_iter().nth(selected) {
+            self.render_list(ui, body);
+        }
+        ui.add_space(6.0);
+    }
+
     fn render_blocks(&mut self, ui: &mut egui::Ui) {
         let blocks = self.blocks.clone();
         self.render_list(ui, blocks);
@@ -968,7 +1121,7 @@ impl Viewer {
                     ui.add_space(6.0);
                 }
                 Block::Para(parts) => {
-                    ui.label(self.job(&parts, 17.0, body, FontFamily::Proportional));
+                    self.render_flow(ui, &parts, 17.0, body, FontFamily::Proportional);
                     ui.add_space(8.0);
                 }
                 Block::Quote(parts) => {
@@ -993,7 +1146,10 @@ impl Viewer {
                     }
                     ui.add_space(8.0);
                 }
-                Block::Pre(text) => {
+                Block::Pre { lang, text } => {
+                    if let Some(lang) = lang {
+                        ui.label(RichText::new(lang).size(11.0).color(muted));
+                    }
                     ui.label(
                         RichText::new(text)
                             .monospace()
@@ -1066,6 +1222,111 @@ impl Viewer {
                     ui.add_space(8.0);
                 }
                 Block::Gap => ui.add_space(6.0),
+                Block::Hr => {
+                    ui.add_space(6.0);
+                    let width = ui.available_width();
+                    let (rect, _) =
+                        ui.allocate_exact_size(egui::vec2(width, 1.0), egui::Sense::hover());
+                    ui.painter().rect_filled(rect, 0.0, Color32::from_gray(212));
+                    ui.add_space(8.0);
+                }
+                Block::Ordered(items) => {
+                    for (index, item) in items.into_iter().enumerate() {
+                        ui.horizontal(|ui| {
+                            ui.add_space(12.0);
+                            ui.label(
+                                RichText::new(format!("{}.", index + 1))
+                                    .size(16.0)
+                                    .color(muted),
+                            );
+                            ui.add_space(2.0);
+                            ui.label(self.job(&item, 17.0, body, FontFamily::Proportional));
+                        });
+                    }
+                    ui.add_space(8.0);
+                }
+                Block::Caption(parts) => {
+                    ui.label(self.job(&parts, 13.0, muted, FontFamily::Proportional));
+                    ui.add_space(8.0);
+                }
+                Block::Table { header, rows } => {
+                    self.render_table(ui, &header, &rows);
+                }
+                Block::Note {
+                    kind,
+                    title,
+                    body: inner,
+                } => {
+                    self.render_note(ui, kind, &title, inner);
+                }
+                Block::Details { summary, body } => {
+                    let label = markup::plain(&summary);
+                    let salt = ui.next_auto_id();
+                    egui::CollapsingHeader::new(RichText::new(label).size(16.0))
+                        .id_salt(salt)
+                        .show(ui, |ui| self.render_list(ui, body));
+                    ui.add_space(6.0);
+                }
+                Block::Tabs { titles, bodies } => {
+                    self.render_tabs(ui, &titles, bodies);
+                }
+                Block::Textarea { name, label } => {
+                    saw_input = true;
+                    ui.label(RichText::new(label).size(14.0).color(muted));
+                    let mut value = self.fields.get(&name).cloned().unwrap_or_default();
+                    let width = ui.available_width();
+                    let resp = ui.add(
+                        egui::TextEdit::multiline(&mut value)
+                            .desired_rows(3)
+                            .desired_width(width),
+                    );
+                    if resp.changed() {
+                        self.fields.insert(name, value);
+                    }
+                    ui.add_space(4.0);
+                }
+                Block::Select {
+                    name,
+                    label,
+                    options,
+                } => {
+                    saw_input = true;
+                    let current = self
+                        .fields
+                        .get(&name)
+                        .cloned()
+                        .filter(|v| options.contains(v))
+                        .unwrap_or_else(|| options.first().cloned().unwrap_or_default());
+                    let mut chosen = current.clone();
+                    ui.horizontal(|ui| {
+                        ui.add_space(12.0);
+                        ui.label(RichText::new(label).size(15.0).color(muted));
+                        egui::ComboBox::from_id_salt(("nac-select", name.as_str()))
+                            .selected_text(current.clone())
+                            .show_ui(ui, |ui| {
+                                for option in &options {
+                                    ui.selectable_value(&mut chosen, option.clone(), option.as_str());
+                                }
+                            });
+                    });
+                    if chosen != current {
+                        self.fields.insert(name, chosen);
+                    }
+                    ui.add_space(4.0);
+                }
+                Block::Checkbox { name, label } => {
+                    saw_input = true;
+                    let id = ui.scope_id().with(("nac-check", name.as_str()));
+                    let mut checked = ui.data_mut(|d| *d.get_temp_mut_or_default::<bool>(id));
+                    if ui.checkbox(&mut checked, label).changed() {
+                        self.fields.insert(
+                            name,
+                            if checked { "1".to_string() } else { String::new() },
+                        );
+                    }
+                    ui.data_mut(|d| d.insert_temp(id, checked));
+                    ui.add_space(4.0);
+                }
                 Block::Columns(parts) => {
                     let n = parts.len().clamp(1, 4);
                     let gap = ui.spacing().item_spacing.x;

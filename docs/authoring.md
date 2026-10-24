@@ -30,13 +30,21 @@ nac.done()
 
 生成的 `nac.py` 按用途分成 11 节，**只有 C/D/E/F/G 会往页面上写内容**，其余都是读环境或工具函数。
 
-### A. 本代常量
+表格里标 **仅动态** 的函数在静态页里调用会直接抛错（见 §5.5）。
+
+### A. 环境
 
 | 名字 | 内容 |
 |---|---|
-| `nac.PAGES` | 本代所有内部页号，如 `(1, 2, 3, 7)`（一般不用） |
-| `nac.PATHS` | 路径到内部页号的映射，如 `{"/": 1, "/about": 2}`（一般不用） |
+| `nac.PAGES` | 本代所有内部页号，如 `(5488, 7488)` |
+| `nac.PATHS` | 路径到内部页号的映射，如 `{"/": 5488}` |
 | `nac.IMAGES` | 图片表，如 `{"img/plan.png": (1, 640, 360)}`（id, 宽, 高） |
+| `nac.TITLES` | 页号到标题的映射 |
+| `nac.GEN` | 本代代号 |
+| `nac.gen()` | 同上，函数形式 |
+| `nac.pages()` | `[(页号, 路径, 标题), ...]`，做全站索引时用 |
+| `nac.url(page)` | 页号 → 路径；找不到回 `/` |
+| `nac.title_of(page)` | 页号 → 标题 |
 
 ### B. 文本与转义
 
@@ -46,31 +54,60 @@ nac.done()
 | `nac.b(text)` | 粗体 |
 | `nac.i(text)` | 斜体 |
 | `nac.tt(text)` | 等宽 |
+| `nac.join(*parts)` | 拼成一行，`None` 自动跳过 |
 
-### C. 块级排版
+### C. 块级
 
 | 调用 | 说明 |
 |---|---|
 | `nac.h1/h2/h3(text)` | 三级标题 |
-| `nac.p(*parts)` | 段落，参数按顺序拼接 |
-| `nac.quote(*parts)` | 引用（连续调用合成一块） |
-| `nac.bullets(*items)` | 无序列表，一项一行 |
-| `nac.code(text)` | 等宽块，保留换行 |
+| `nac.p(*parts)` | 段落，参数按顺序拼接；里面可以放 `nac.b(...)` |
+| `nac.quote(*parts)` | 引用 |
+| `nac.bullets(*items)` | 无序列表 |
+| `nac.ordered(*items)` | 有序列表，编号自动加 |
+| `nac.table(header, rows)` | 表格，第一行是表头 |
+| `nac.defs(pairs)` | 键值表（两列的 `table`） |
+| `nac.hr()` | 分隔线 |
+| `nac.code(text, lang=None)` | 等宽块；给了 `lang` 会标出语言 |
 | `nac.gap()` | 空行，分段与间距 |
-| `nac.raw(line)` | 原样写一行线上标记，兜底用 |
+| `nac.raw(line)` | 原样写一行标记，兜底用 |
 
-### D. 布局
+```python
+nac.table(
+    ("名字", "说明"),
+    [("甲", nac.b("第一个")), ("乙", "第二个")],
+)
+```
+
+### D. 容器
 
 | 调用 | 说明 |
 |---|---|
-| `with nac.cols(n=2):` | 里面的内容并排成 n 列（最多 4） |
-| `nac.col()` | 在 `cols` 里强制换到下一列 |
+| `with nac.cols(n=2):` + `nac.col()` | 并排成 n 列（最多 4） |
+| `with nac.note(kind, title):` | 提示框，`kind` 取 `info`/`ok`/`warn`/`danger` |
+| `with nac.tip(title)` / `ok` / `warn` / `danger` | 上面那个的简写 |
+| `with nac.details(summary):` | 可折叠区块，默认收起 |
+| `with nac.tabs(*titles):` + `nac.tab()` | 页签 |
+
+容器**可以互相嵌套**，深度不限：
+
+```python
+with nac.note("warn", "注意"):
+    nac.p("提示框里可以放列表：")
+    nac.bullets("甲", "乙")
+    with nac.cols(2):
+        nac.p("左")
+        nac.col()
+        nac.p("右")
+```
 
 ### E. 媒体
 
 | 调用 | 说明 |
 |---|---|
-| `nac.img(path, width=None)` | 插图片；`path` 是 `site/` 里的相对路径，`width` 是百分比 |
+| `nac.img(path, width=None)` | 插图片；`path` 是 `site/` 里的相对路径 |
+| `nac.cap(text)` | 图片说明，小字灰字 |
+| `nac.figure(path, caption=None, width=None)` | 图片 + 说明 |
 
 ### F. 导航
 
@@ -78,9 +115,17 @@ nac.done()
 |---|---|
 | `nac.link_path(path, text)` | 跳到路径；目录要带尾斜杠（如 `/notes/`） |
 | `nac.link(page, text)` | 按内部页号跳转；页号不存在时整行不显示 |
+| `nac.nav(*paths)` | 一行面包屑，每个路径都是行内链接 |
+| `nac.home()` | 回首页那一行 |
 | `nac.redirect_path(path)` | 按路径立刻跳转；路径不存在时不动 |
 | `nac.redirect(page)` | 按内部页号跳转，本页已拼的内容丢弃 |
 | `nac.first_page()` | 本代最小内部页号（一般用 `link_path("/")`） |
+
+**段落里的行内链接**直接写标记，它不会独占一行：
+
+```python
+nac.p("细节见 ", "[[path:/notes/|笔记目录]]", " 那一页。")
+```
 
 ### G. 表单
 
@@ -89,7 +134,10 @@ nac.done()
 | `nac.form_path(path)` | 声明表单提交到某个路径 |
 | `nac.form(page)` | 声明表单提交给内部页号 |
 | `nac.field(name, label="", secret=False)` | 单行输入 |
-| `nac.password(name, label="")` | 密码输入（`field(..., secret=True)` 的简写） |
+| `nac.password(name, label="")` | 密码输入 |
+| `nac.textarea(name, label="")` | 多行输入 |
+| `nac.select(name, label, options)` | 下拉选择，`options` 是字符串列表 |
+| `nac.check(name, label="")` | 复选框；勾上提交 `"1"`，否则空串 |
 | `nac.button(label)` | 提交按钮 |
 
 ### H. 请求
@@ -99,16 +147,30 @@ nac.done()
 | `nac.request()` | `{"page": 页号, "fields": {...}}` |
 | `nac.fields()` | 只要字段字典 |
 | `nac.field_of(name, default="")` | 取一个字段并去掉首尾空白 |
+| `nac.submitted()` | 这次请求带表单内容吗 |
+| `nac.checked(name)` | 复选框是否勾上 |
 | `nac.page_id()` | 当前页号 |
+| `nac.flash(message)` | 留言给下一个页面看（配 `redirect_path` 用）· 仅动态 |
+| `nac.flashes()` | 取出并清空待显示的留言 · 仅动态 |
+
+```python
+if nac.submitted():
+    nac.flash("已保存")
+    nac.redirect_path("/list")
+for line in nac.flashes():
+    nac.p(nac.b(line))
+```
 
 ### I. 会话
 
 | 调用 | 说明 |
 |---|---|
-| `nac.session()` | 会话状态字典（跨页、跨请求） |
-| `nac.save_session(state)` | 写回状态 |
+| `nac.session()` | 会话状态字典（跨页、跨请求）· 仅动态 |
+| `nac.save_session(state)` | 写回状态 · 仅动态 |
 | `nac.session_get(key, default=None)` | 读一个键 |
-| `nac.session_set(key, value)` | 写一个键（内部已保存） |
+| `nac.session_set(key, value)` | 写一个键 |
+| `nac.session_update(**values)` | 一次写多个键，只读写文件一次 |
+| `nac.session_pop(key, default=None)` | 取走并删除 |
 
 ### J. 站点数据（`data/appdata/`）
 
@@ -118,9 +180,32 @@ nac.done()
 | `nac.data_path(name)` | 私有目录里的某个文件 |
 | `nac.read_json(name, default=None)` | 读 JSON；不存在或坏了返回默认值 |
 | `nac.write_json(name, value)` | **原子**写 JSON（先 `.tmp` 再替换） |
+| `nac.update_json(name, fn, default=None)` | **带锁**的读-改-写 |
 | `nac.read_lines(name)` | 读文本行；不存在返回 `[]` |
 | `nac.append_line(name, text)` | 追加一行 |
-| `nac.counter(name, step=1)` | 计数并返回新值（首次从 0 起） |
+| `nac.counter(name, step=1)` | 原子地加一并返回新值 |
+| `nac.db(name="site.db")` | SQLite 连接（WAL、`row_factory=Row`） |
+
+以上全部 **仅动态**。
+
+`update_json` 是并发安全的自增工具，`counter` 就是它包了一层：
+
+```python
+hits = nac.counter("status-views.json")
+
+total = nac.update_json("stats.json", lambda s: {"n": (s or {}).get("n", 0) + 1}, {})
+```
+
+需要一个真正的数据库时用 `db()`——它是标准库 `sqlite3`，不联网、不需要服务：
+
+```python
+db = nac.db()
+db.execute("create table if not exists msg(id integer primary key, body text, at text)")
+if nac.submitted():
+    db.execute("insert into msg(body, at) values(?, ?)", (body, now))
+    db.commit()
+rows = db.execute("select body, at from msg order by id desc limit 10").fetchall()
+```
 
 ### K. 输出
 
@@ -129,76 +214,114 @@ nac.done()
 | `nac.done()` / `nac.flush()` | 输出页面（不调用也会在退出时自动输出） |
 
 `nac` 里所有写文件的地方都是**原子写**，断电或并发不会留下半截 JSON。
-`field/button/link` 会自动清掉标记里的分隔符（`|`、`]]`），所以你不用手动防注入式破坏排版。
+`field/button/link/table` 会自动清掉标记里的分隔符（`|`、`]]`），所以你不用手动防排版破坏。
 
 ---
 
-## 2. 完整例子：留言板
-
-`site/7.py`（仓库里就是这个），用到了表单、会话与站点私有目录里的小工具：
+## 2. 完整例子：留言板（SQLite 版）
 
 ```python
 # nac:title 留言板
+# nac:path /guestbook
+
+import time
+
 import nac
 
-name = nac.field_of("name")[:40]
-if name:
+name = nac.field_of("name")[:40] or "匿名"
+body = nac.field_of("message")[:200]
+
+db = nac.db()
+db.execute(
+    "create table if not exists msg("
+    "id integer primary key, name text, body text, at text)"
+)
+
+if body:
+    db.execute(
+        "insert into msg(name, body, at) values(?, ?, ?)",
+        (name, body, time.strftime("%Y-%m-%d %H:%M")),
+    )
+    db.commit()
     nac.session_set("name", name)
-    nac.append_line("guestbook.txt", name)
-    nac.counter("visits.json")
+
+rows = db.execute("select name, body, at from msg order by id desc limit 10").fetchall()
 
 nac.h1("留言板")
-nac.p("你上次留下的名字：", nac.session_get("name") or "（还没有）")
-nac.p("本页被提交过 ", nac.b(nac.read_json("visits.json", {"n": 0})["n"]), " 次")
+nac.p("留言存在站点私有目录的 SQLite 里，不联网。")
+if nac.session_get("name"):
+    nac.p("你上次留下的名字：", nac.b(nac.session_get("name")))
 nac.gap()
 
-recent = nac.read_lines("guestbook.txt")[-5:]
-if recent:
-    nac.quote("最近的记录")
-    nac.bullets(*recent)
+if rows:
+    nac.table(
+        ("名字", "留言", "时间"),
+        [(row["name"], row["body"], nac.tt(row["at"])) for row in rows],
+    )
 else:
     nac.p("还没有人留言。")
 
 nac.gap()
-nac.form(7)
-nac.field("name", "你的名字")
+nac.form_path("/guestbook")
+nac.field("name", "你的名字（可留空）")
+nac.textarea("message", "留言，最多 200 字")
 nac.button("留下")
 nac.gap()
-nac.link(1, "回首页")
-
+nac.home()
 nac.done()
 ```
 
-要点：**页面自己负责一切**——读文件、写文件、判断是否需要跳转。没有框架，也没有中间层。
-判断"这是不是一次表单提交"用 `if name:`（`field_of` 已去空白），
-不要用 `if nac.fields():`——空输入框也会作为空字符串提交上来。
+要点：**页面自己负责一切**——读数据、写数据、判断是否需要跳转。没有框架，也没有中间层。
+
+判断"这是不是一次表单提交"用 `nac.submitted()`，或 `if body:`（`field_of` 已去空白）。
 
 ---
 
 ## 3. 线上标记（`nac` 最终输出的东西）
 
 客户端只认这套行标记；`nac` 是生成它们的便捷方式，`nac.raw()` 可以直接写。
+**块容器可以嵌套**，只要 `[[end]]` 对得上。
 
 ```
 # 标题          ## 二级        ### 三级
-空行            分隔段落
-> 引用          （连续的 > 行会合成一个引用块）
-- 列表项        （连续的 - 行会合成一个列表）
-| 等宽行        （连续的 | 行会合成一个代码块）
+普通文字行       （连续的行合成一个段落）
+> 引用          （连续的 > 行合成一个引用块）
+- 列表项        （连续的 - 行合成一个列表）
+1. 有序项       （连续的 数字. 行合成有序列表，编号由客户端加）
+| 等宽行        （连续的 | 行合成代码块）
+---             分隔线
+空行            分段
+
 !img 1 80% 640x360     图片：id、宽度%、可选原始宽高比
-[[2|第二页]]            页内跳转
-[[form 7]]             表单提交目标
-[[input name|提示]]     单行输入
-[[secret pass|提示]]    密码输入
-[[button 提交]]         按钮
-[[cols 2]] … [[end]]   并排布局
-[[col]]                在 cols 里换列
+!cap 图片说明           小字灰字，通常紧跟在图后面
+
+[[2|第二页]]            整行跳转（页号）
+[[path:/notes/|笔记]]   整行跳转（路径）
+--- 行内 ---
+段落里写 [[path:/x|这样的]] 就是行内链接，不独占一行。
+
+[[form 7]]              表单提交目标
+[[input name|提示]]      单行输入
+[[secret pass|提示]]     密码输入
+[[textarea body|提示]]   多行输入
+[[select mode|提示|甲;乙;丙]]   下拉选择
+[[check agree|同意]]     复选框
+[[button 提交]]          按钮
+
+[[cols 2]] … [[col]] … [[end]]          并排布局
+[[table]] | 表头 | … | 表体 | [[end]]    表格，第一行是表头
+[[note warn|标题]] … [[end]]            提示框，kind 取 info/ok/warn/danger
+[[details 标题]] … [[end]]              可折叠区块
+[[tabs 甲;乙]] … [[tab]] … [[end]]      页签
+[[code python]] … [[end]]               带语言名的代码块
 ```
 
 行内：`*粗*`、`_斜_`、`` `等宽` ``，反斜杠 `\` 转义；`\n` 在文本里会被压成空格。
 
 **段落规则**：连续的普通行会合并成一个段落（用空格连接）。想断开就在中间放一个空行，
 或者用 `nac.gap()`。
+
+**未知指令**（`[[nonsense]]`）不会被吞掉，会当成普通文字显示——这样版本不一致时你能立刻看见。
 
 ---
 
@@ -216,7 +339,28 @@ with nac.cols(2):
 - 不写 `nac.col()` 时，按**块数**平均分配到 n 列。
 - 写了 `nac.col()`，切点完全由你决定，`n` 会被忽略（列数 = 切点 + 1）。
 - 最多 4 列。列宽由客户端按可用宽度平分；两列高度不会自动对齐。
-- 可以嵌套：`with nac.cols(2)` 里再 `with nac.cols(2)`。
+- 可以嵌套，里面还能放表格、提示框、页签。
+
+---
+
+## 4.5 提示框、折叠与页签
+
+```python
+with nac.warn("注意"):
+    nac.p("这会在黄色框里。")
+
+with nac.details("展开看实现细节"):
+    nac.code("nac.table(header, rows)", lang="python")
+
+with nac.tabs("概览", "细节"):
+    nac.p("第一页的内容")
+    nac.tab()
+    nac.p("第二页的内容")
+```
+
+- 提示框的四种颜色由 `kind` 决定，标题可留空。
+- 折叠块默认收起，点标题展开。
+- 页签的选中状态由客户端记住，换页后回来还在。
 
 ---
 
@@ -224,6 +368,7 @@ with nac.cols(2):
 
 1. 把图片放进 `site/`（例如 `site/img/plan.png`），**直接放原始文件，不要为了发布另存一次**。
 2. 页面里 `nac.img("img/plan.png", 80)`（`80` 是宽度百分比，省略即 100%）。
+   想加说明用 `nac.figure("img/plan.png", "一张图", 80)`。
 3. 发布时：
    - 支持 `png` / `jpeg` / `webp` / `gif`；
    - **不重编码**，只按容器结构剪掉元数据段，像素逐位不变：
@@ -255,6 +400,15 @@ with nac.cols(2):
 - 输出同样受 16 KB 限制；执行失败会让整个发布失败
 - 静态页的元数据 `kind` 是 `static`，动态页仍是 `dynamic`
 - 静态页发布时以发布者身份执行，不要在里面写有副作用的代码
+- **在静态页里调用 §1 标了「仅动态」的函数会直接报错**，例如：
+
+  ```
+  publish failed: static 65206.py: RuntimeError: update_json() 不能在静态页里用：
+  这一页标了 # nac:static，发布时就已经渲染完，访问时不会再执行 Python。
+  ```
+
+  这是故意的：静态页的 `NAC_DATA_DIR` 是一个渲染完就删掉的临时目录，
+  以前在静态页里写数据既不报错也不生效，只在线上悄悄算错。
 
 ## 6. 发布时的校验
 
@@ -265,6 +419,7 @@ with nac.cols(2):
 | 存在 `.page` 文件 | 报错并提示改名 |
 | Python 语法错 | 报错，带文件名与原因（`2.py: SyntaxError: '(' was never closed`） |
 | 文件带 BOM | 自动摘掉（Notepad 存的文件常见） |
+| 静态页里用了会话/站点数据 | 报错，说明去掉 `# nac:static` 即可 |
 | 图片扩展名不支持 | 报错，指出该转成什么 |
 | `data` 或 `archive` 放在 `site` 里 | 报错（会把上一代产物/归档原件当成素材） |
 | 引用了不存在的图片路径 | 运行时 `nac.img()` 抛 `KeyError`，服务端返回 `EMPTY` 并在 stderr 记录 |
@@ -285,6 +440,7 @@ with nac.cols(2):
 | `NAC_INPUT` | JSON：`{"page": N, "fields": {...}}` |
 | `NAC_SESSION_FILE` | 会话状态文件路径（`nac.session()` 读写它） |
 | `NAC_DATA_DIR` | 站点私有目录（`nac.data_dir()` 返回它） |
+| `NAC_STATIC` | 为 `1` 表示这次是发布的预渲染，`nac` 据此拒绝会话/数据操作 |
 | 其他 | `contentd --env K=V` 传进来的额外变量（运营台用 `NAC_ROOT`） |
 
 - 进程以 `python3 -B -X utf8` 启动，工作目录是代目录，`PYTHONIOENCODING=utf-8`。

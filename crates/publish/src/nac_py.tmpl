@@ -3,24 +3,30 @@
 一个页面就是一个 Python 程序：import nac，用下面的函数拼内容，最后 nac.done()。
 
 分类索引
---------
-A. 本代常量        PAGES / IMAGES
-B. 文本与转义      esc, b, i, tt
-C. 块级排版        h1 h2 h3, p, quote, bullets, code, gap, raw
-D. 布局            cols, col
-E. 媒体            img
-F. 导航            link, link_path, redirect, first_page
-G. 表单            form, form_path, field, password, button
-H. 请求            request, fields, field_of, page_id
-I. 会话            session, save_session, session_get, session_set
-J. 站点数据        data_dir, data_path, read_json, write_json,
-                   read_lines, append_line, counter
-K. 输出            done, flush
+========
+A. 环境        PAGES PATHS IMAGES TITLES GEN | gen() pages() title_of() url()
+B. 文本        esc b i tt | join()
+C. 块级        h1 h2 h3 p quote bullets ordered table defs hr code raw gap
+D. 容器        cols / col | note / tip / warn / danger / ok | details | tabs / tab
+E. 媒体        img figure cap
+F. 导航        link link_path nav home redirect redirect_path first_page
+G. 表单        form form_path field password textarea select check button
+H. 请求        request fields field_of submitted checked page_id flash flashes
+I. 会话        session save_session session_get session_set session_update session_pop
+J. 数据        data_dir data_path read_json write_json update_json read_lines
+               append_line counter db
+K. 输出        done flush
+
+静态页与动态页
+--------------
+标了 `# nac:static` 的页面在**发布时**执行一次，结果存成文件，访问时不再启动
+Python。因此 H / I / J 三组（请求、会话、站点数据）在静态页里没有意义——在那里
+调用它们会直接抛错，而不是悄悄算出一个错的结果。
 
 约定
 ----
-* 只有 C/D/E/F/G 里的函数会写内容，其余都是读环境、读文件或工具函数。
-* 需要本库没覆盖的排版时用 raw()，直接写一行线上标记。
+* 会写内容的只有 C / D / E / F / G；其余都是读环境、读文件或工具函数。
+* 本库没覆盖的排版用 raw() 直接写一行标记。
 * 所有写文件的操作都是原子的（先写临时文件再 os.replace）。
 """
 
@@ -34,20 +40,36 @@ from pathlib import Path
 
 # --------------------------------------------------------------- A. 本代常量
 
-#: 本代所有页号，例如 (1, 2, 3, 7)
+#: 本代所有页号，例如 (5488, 7488)
 PAGES = @PAGES@
 
-#: 路径 -> 页号，例如 {"/": 1, "/second": 2}
+#: 路径 -> 页号，例如 {"/": 5488}
 PATHS = @PATHS@
 
 #: 本代图片表：相对路径 -> (图片 id, 宽, 高)
 IMAGES = @IMAGES@
 
+#: 页号 -> 标题
+TITLES = @TITLES@
+
+#: 本代代号
+GEN = "@GEN@"
+
+_STATIC = os.environ.get("NAC_STATIC") == "1"
 _buf = []
 _flushed = False
 
 
-# ----------------------------------------------------------- B. 文本与转义
+def _dynamic(what):
+    if _STATIC:
+        raise RuntimeError(
+            "%s 不能在静态页里用：这一页标了 # nac:static，发布时就已经渲染完，"
+            "访问时不会再执行 Python。把那行标记删掉，它就会变成每次请求都执行的动态页。"
+            % what
+        )
+
+
+# --------------------------------------------------------------- B. 文本与转义
 
 def esc(text):
     """把任意文本变成不会被当成标记的文面。"""
@@ -77,10 +99,19 @@ def tt(text):
     return "`" + esc(text) + "`"
 
 
-# ------------------------------------------------------------- C. 块级排版
+def join(*parts):
+    """把若干段拼成一行；None 会被跳过。"""
+    return "".join(str(x) for x in parts if x is not None)
+
+
+# --------------------------------------------------------------- C. 块级排版
 
 def raw(line):
     """原样写一行标记，兜底用。"""
+    _buf.append(str(line))
+
+
+def _emit(line):
     _buf.append(str(line))
 
 
@@ -98,12 +129,12 @@ def h3(text):
 
 def p(*parts):
     """段落。参数按顺序拼接，可以直接塞 b()/i()/tt() 的返回值。"""
-    _buf.append("".join(str(x) for x in parts))
+    _buf.append(join(*parts))
 
 
 def quote(*parts):
     """引用。连续调用会合成一个引用块。"""
-    _buf.append("> " + "".join(str(x) for x in parts))
+    _buf.append("> " + join(*parts))
 
 
 def bullets(*items):
@@ -112,10 +143,50 @@ def bullets(*items):
         _buf.append("- " + esc(item))
 
 
-def code(text):
-    """等宽块，保留换行。"""
-    for line in str(text).splitlines() or [""]:
-        _buf.append("| " + line)
+def ordered(*items):
+    """有序列表。编号由渲染器加，这里写什么数字都不影响。"""
+    for number, item in enumerate(items, 1):
+        _buf.append("%d. %s" % (number, esc(item)))
+
+
+def table(header, rows):
+    """表格，第一行是表头。
+
+        nac.table(("名字", "说明"), [("甲", "第一个"), ("乙", "第二个")])
+
+    单元格里可以用 b()/i()/tt()；`|` 会被换成全角，不会打断列。
+    """
+    _buf.append("[[table]]")
+    _buf.append(_row(header))
+    for row in rows:
+        _buf.append(_row(row))
+    _buf.append("[[end]]")
+
+
+def _row(cells):
+    return "| " + " | ".join(_cell(c) for c in cells) + " |"
+
+
+def defs(pairs):
+    """键值表，等于两列的 table。"""
+    table(("条目", "说明"), pairs)
+
+
+def hr():
+    """分隔线。"""
+    _buf.append("---")
+
+
+def code(text, lang=None):
+    """等宽块。给了 lang 会显示成代码块并标上语言名。"""
+    body = str(text).splitlines() or [""]
+    if lang:
+        _buf.append("[[code %s]]" % _cell(lang))
+        _buf.extend(body)
+        _buf.append("[[end]]")
+    else:
+        for line in body:
+            _buf.append("| " + line)
 
 
 def gap():
@@ -123,7 +194,20 @@ def gap():
     _buf.append("")
 
 
-# ----------------------------------------------------------------- D. 布局
+# ----------------------------------------------------------------- D. 容器
+
+@contextmanager
+def _section(open_line):
+    global _buf
+    outer, _buf = _buf, []
+    try:
+        yield
+    finally:
+        inner, _buf = _buf, outer
+        _buf.append(open_line)
+        _buf.extend(inner)
+        _buf.append("[[end]]")
+
 
 def col():
     """在 with nac.cols(...) 里强制换到下一列。"""
@@ -136,23 +220,75 @@ def cols(n=2):
 
         with nac.cols(2):
             nac.h2("左")
-            nac.bullets("甲", "乙")
             nac.col()
             nac.h2("右")
-            nac.p("另一边")
 
     不写 nac.col() 时按块数平均切；写了就按你给的位置切（此时 n 被忽略）。
     最多 4 列。
     """
-    global _buf
-    outer, _buf = _buf, []
-    try:
+    with _section("[[cols %d]]" % max(1, min(4, int(n)))):
         yield
-    finally:
-        inner, _buf = _buf, outer
-        outer.append("[[cols %d]]" % max(1, min(4, int(n))))
-        outer.extend(inner)
-        outer.append("[[end]]")
+
+
+@contextmanager
+def note(kind="info", title=""):
+    """提示框。kind 取 info / ok / warn / danger。
+
+        with nac.note("warn", "注意"):
+            nac.p("这里写正文，可以再放列表和表格。")
+    """
+    spec = kind if not title else "%s|%s" % (kind, _cell(title))
+    with _section("[[note %s]]" % spec):
+        yield
+
+
+def tip(title=""):
+    """蓝色提示框。"""
+    return note("info", title)
+
+
+def ok(title=""):
+    """绿色成功框。"""
+    return note("ok", title)
+
+
+def warn(title=""):
+    """黄色警告框。"""
+    return note("warn", title)
+
+
+def danger(title=""):
+    """红色错误框。"""
+    return note("danger", title)
+
+
+@contextmanager
+def details(summary):
+    """可折叠区块，默认收起。
+
+        with nac.details("展开看细节"):
+            nac.p("藏起来的内容。")
+    """
+    with _section("[[details %s]]" % _cell(summary)):
+        yield
+
+
+@contextmanager
+def tabs(*titles):
+    """分页签，每个 nac.tab() 开一个新页。
+
+        with nac.tabs("甲", "乙"):
+            nac.p("第一页")
+            nac.tab()
+            nac.p("第二页")
+    """
+    with _section("[[tabs %s]]" % ";".join(_cell(t) for t in titles)):
+        yield
+
+
+def tab():
+    """在 with nac.tabs(...) 里切到下一个页签。"""
+    _buf.append("[[tab]]")
 
 
 # ----------------------------------------------------------------- E. 媒体
@@ -165,7 +301,9 @@ def img(path, width=None):
     图片自带真实宽高，客户端会先按比例预留位置，图到了不跳。
     """
     if path not in IMAGES:
-        raise KeyError("没有这张图片：%s（这代里有：%s）" % (path, ", ".join(sorted(IMAGES))))
+        raise KeyError(
+            "没有这张图片：%s（这代里有：%s）" % (path, ", ".join(sorted(IMAGES)))
+        )
     ident, w, h = IMAGES[path]
     line = "!img %d" % ident
     if width:
@@ -173,6 +311,18 @@ def img(path, width=None):
     if w and h:
         line += " %dx%d" % (w, h)
     _buf.append(line)
+
+
+def cap(text):
+    """图片说明，小字灰字。"""
+    _buf.append("!cap " + str(text).replace("\n", " "))
+
+
+def figure(path, caption=None, width=None):
+    """图片 + 说明。"""
+    img(path, width)
+    if caption:
+        cap(caption)
 
 
 # ----------------------------------------------------------------- F. 导航
@@ -206,6 +356,20 @@ def _path_id(path):
 def link_path(path, text):
     """指向路径；目录用带尾斜杠的路径（如 /notes/）。"""
     _buf.append("[[path:%s|%s]]" % (_url(path), _cell(text)))
+
+
+def nav(*paths):
+    """一行面包屑，每个路径都是可点的行内链接。"""
+    parts = []
+    for path in paths:
+        name = "首页" if _url(path) == "/" else str(path).strip("/") or "/"
+        parts.append("[[path:%s|%s]]" % (_url(path), _cell(name)))
+    _buf.append(" › ".join(parts))
+
+
+def home():
+    """回首页的一行链接。"""
+    link_path("/", "回首页")
 
 
 def redirect(page):
@@ -256,6 +420,28 @@ def password(name, label=""):
     field(name, label, secret=True)
 
 
+def textarea(name, label=""):
+    """多行输入框。"""
+    name = _cell(name)
+    label = _cell(label) or name
+    _buf.append("[[textarea %s|%s]]" % (name, label))
+
+
+def select(name, label, options):
+    """下拉选择。"""
+    name = _cell(name)
+    label = _cell(label) or name
+    choices = ";".join(_cell(o) for o in options)
+    _buf.append("[[select %s|%s|%s]]" % (name, label, choices))
+
+
+def check(name, label=""):
+    """复选框；勾上时提交 "1"，否则提交空字符串。"""
+    name = _cell(name)
+    label = _cell(label) or name
+    _buf.append("[[check %s|%s]]" % (name, label))
+
+
 def button(label):
     """提交按钮。一页里最后一个按钮决定提交目标，通常只放一个。"""
     _buf.append("[[button %s]]" % _cell(label))
@@ -281,12 +467,41 @@ def field_of(name, default=""):
     return value.strip() if isinstance(value, str) else value
 
 
+def submitted():
+    """这次请求带着表单内容吗？"""
+    return bool(fields())
+
+
+def checked(name):
+    """复选框是否被勾上。"""
+    value = fields().get(name)
+    return value not in (None, "", "0", "false", "False")
+
+
 def page_id():
     """当前页号。"""
     value = os.environ.get("NAC_PAGE")
     if value:
         return int(value)
     return request().get("page")
+
+
+def flash(message):
+    """留言给下一个页面看（配合 redirect_path 用）。"""
+    _dynamic("flash()")
+    state = session()
+    state.setdefault("_flash", []).append(str(message))
+    save_session(state)
+
+
+def flashes():
+    """取出并清空待显示的留言。"""
+    _dynamic("flashes()")
+    state = session()
+    out = state.pop("_flash", [])
+    if out:
+        save_session(state)
+    return out
 
 
 # ----------------------------------------------------------------- I. 会话
@@ -298,6 +513,7 @@ def _session_path():
 
 def session():
     """本次会话的状态字典（跨页、跨请求保存）。"""
+    _dynamic("session()")
     path = _session_path()
     if path and path.exists():
         try:
@@ -309,6 +525,7 @@ def session():
 
 def save_session(state):
     """写回会话状态。"""
+    _dynamic("save_session()")
     path = _session_path()
     if path:
         _atomic_write(path, json.dumps(state, ensure_ascii=False))
@@ -324,10 +541,26 @@ def session_set(key, value):
     save_session(state)
 
 
+def session_update(**values):
+    """一次写多个键，只读写文件一次。"""
+    state = session()
+    state.update(values)
+    save_session(state)
+    return state
+
+
+def session_pop(key, default=None):
+    state = session()
+    value = state.pop(key, default)
+    save_session(state)
+    return value
+
+
 # ------------------------------------------------------------- J. 站点数据
 
 def data_dir():
     """站点私有目录（data/appdata）。数据库、上传、日志都放这里。"""
+    _dynamic("data_dir()")
     path = Path(os.environ["NAC_DATA_DIR"])
     path.mkdir(parents=True, exist_ok=True)
     return path
@@ -348,6 +581,7 @@ def _atomic_write(path, text):
 
 def read_json(name, default=None):
     """读 data_dir 里的 JSON 文件；不存在或坏掉就返回默认值。"""
+    _dynamic("read_json()")
     path = data_path(name)
     if not path.exists():
         return default
@@ -359,11 +593,45 @@ def read_json(name, default=None):
 
 def write_json(name, value):
     """原子写 JSON 文件（先写 .tmp 再替换，断电不会留半截）。"""
+    _dynamic("write_json()")
     _atomic_write(data_path(name), json.dumps(value, ensure_ascii=False, indent=1))
+
+
+def update_json(name, fn, default=None):
+    """读-改-写一次完成，带文件锁。
+
+        nac.update_json("hits.json", lambda n: (n or 0) + 1, 0)
+
+    两个请求同时到达也不会互相覆盖。
+    """
+    _dynamic("update_json()")
+    path = data_path(name)
+    with _lock(str(path) + ".lock"):
+        value = fn(read_json(name, default))
+        write_json(name, value)
+        return value
+
+
+@contextmanager
+def _lock(path):
+    """进程间排它锁；没有 fcntl 的平台退化成不加锁。"""
+    try:
+        import fcntl
+    except ImportError:
+        yield
+        return
+    handle = open(path, "a+")
+    try:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(handle, fcntl.LOCK_UN)
+        handle.close()
 
 
 def read_lines(name):
     """读文本文件的行；不存在就是空列表。"""
+    _dynamic("read_lines()")
     path = data_path(name)
     if not path.exists():
         return []
@@ -372,16 +640,73 @@ def read_lines(name):
 
 def append_line(name, text):
     """往文本文件追加一行（换行会被压成空格）。"""
+    _dynamic("append_line()")
     with open(data_path(name), "a", encoding="utf-8") as fh:
         fh.write(str(text).replace("\n", " ") + "\n")
 
 
 def counter(name, step=1):
-    """存取一个计数，返回变化后的值。第一次从 0 开始。"""
-    state = read_json(name, {"n": 0}) or {}
-    current = int(state.get("n", 0)) + int(step)
-    write_json(name, {"n": current, "at": int(time.time())})
-    return current
+    """原子地加一个计数，返回变化后的值。"""
+
+    def bump(state):
+        state = state or {}
+        state["n"] = int(state.get("n", 0)) + int(step)
+        state["at"] = int(time.time())
+        return state
+
+    return int(update_json(name, bump, {"n": 0}).get("n", 0))
+
+
+def db(name="site.db"):
+    """打开站点私有目录里的 SQLite 数据库（不存在就建）。
+
+        db = nac.db()
+        db.execute("create table if not exists msg(id integer primary key, body text)")
+        db.execute("insert into msg(body) values(?)", (text,))
+        db.commit()
+
+    记得 commit()；连接随进程结束关闭。
+    """
+    _dynamic("db()")
+    import sqlite3
+
+    conn = sqlite3.connect(str(data_path(name)), timeout=2.5)
+    conn.row_factory = sqlite3.Row
+    conn.execute("pragma busy_timeout = 2500")
+    conn.execute("pragma journal_mode = wal")
+    return conn
+
+
+# ------------------------------------------------------------- A. 环境查询
+
+def gen():
+    """本代代号。"""
+    return GEN
+
+
+def titles():
+    """页号 -> 标题 的副本。"""
+    return dict(TITLES)
+
+
+def title_of(page):
+    """取某一页的标题。"""
+    page = int(page)
+    return TITLES.get(page) or TITLES.get(str(page), "")
+
+
+def url(page):
+    """页号 -> 路径；找不到就回首页。"""
+    page = int(page)
+    for path, ident in PATHS.items():
+        if ident == page:
+            return path
+    return "/"
+
+
+def pages():
+    """全部页面：[(页号, 路径, 标题), ...]，按页号排序。"""
+    return [(page, url(page), title_of(page)) for page in PAGES]
 
 
 # ----------------------------------------------------------------- K. 输出

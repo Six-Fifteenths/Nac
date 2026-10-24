@@ -224,7 +224,9 @@ fn run(site: &Path, data: &Path, archive: Option<&Path>) -> Result<(), String> {
     let helper = NAC_PY
         .replace("@PAGES@", &page_list(&pages))
         .replace("@PATHS@", &path_map(&pages))
-        .replace("@IMAGES@", &image_map(&image_sizes));
+        .replace("@IMAGES@", &image_map(&image_sizes))
+        .replace("@TITLES@", &title_map(&pages))
+        .replace("@GEN@", &gen);
     fs::write(gen_dir.join("scripts").join("nac.py"), helper).map_err(|e| e.to_string())?;
 
     let mut page_entries = Vec::new();
@@ -431,6 +433,19 @@ fn path_map(pages: &BTreeMap<u16, PageSource>) -> String {
     out
 }
 
+fn title_map(pages: &BTreeMap<u16, PageSource>) -> String {
+    let mut out = String::from("{");
+    for (i, (id, page)) in pages.iter().enumerate() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        let title = page_title(&page.text).unwrap_or_default();
+        out.push_str(&format!("{id}: {:?}", title));
+    }
+    out.push('}');
+    out
+}
+
 fn image_map(images: &BTreeMap<String, (u16, u32, u32)>) -> String {
     let mut out = String::from("{");
     for (i, (path, (id, w, h))) in images.iter().enumerate() {
@@ -505,6 +520,7 @@ fn render_static(scripts: &Path, id: u16, data: &Path) -> Result<Vec<u8>, String
         .current_dir(scripts)
         .env("NAC_INPUT", format!("{{\"page\":{id},\"fields\":{{}}}}"))
         .env("NAC_PAGE", id.to_string())
+        .env("NAC_STATIC", "1")
         .env("NAC_DATA_DIR", &temp)
         .env("NAC_SESSION_FILE", temp.join("session.json"))
         .env("PYTHONUTF8", "1")
