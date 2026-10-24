@@ -1,0 +1,15 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/protocol",
+    "crates/contentd",
+    "crates/publish",
+    "crates/probe",
+    "crates/viewer",
+]
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

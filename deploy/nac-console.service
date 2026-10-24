@@ -1,0 +1,26 @@
+[Unit]
+Description=nac ops console (local only)
+After=network.target
+
+[Service]
+Type=simple
+User=nac
+Group=nac
+WorkingDirectory=/srv/nac
+# 运营台永远只监听 127.0.0.1；远程访问用 ssh -L，不在防火墙上开口。
+ExecStart=/srv/nac/bin/contentd \
+    --data /srv/nac/admin/data \
+    --port 7001 \
+    --bind 127.0.0.1 \
+    --env NAC_ROOT=/srv/nac \
+    --env NAC_LOG=/srv/nac/access.jsonl
+Restart=always
+RestartSec=2
+
+NoNewPrivileges=yes
+ProtectSystem=full
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

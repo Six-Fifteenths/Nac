@@ -1,0 +1,10 @@
+/target
+/data
+/admin/data
+/archive
+/nac.routes
+*.log
+access.jsonl
+
+# 只作参考的上游项目（第三方代码，不进本仓库）
+/gurted

@@ -1,0 +1,236 @@
+# 部署与运维手册
+
+目标环境：一台 Linux 服务器（systemd），Python 3.9+。
+
+---
+
+## 1. 服务器上长什么样
+
+```
+/srv/nac/
+├─ bin/contentd              release 构建（strip + LTO + panic=abort）
+├─ bin/publish               发布工具（运营台的"发布"按钮会调它）
+├─ site/                     公开站点的页面源码
+├─ admin/site/               运营台页面源码
+├─ data/                     公开站点：current / gen/ / state/ / appdata/
+├─ admin/data/               运营台自己的代与会话（与公开站点隔离）
+├─ archive/                  原图归档（只有用 --archive 时才有）
+└─ access.jsonl              访问日志（只有给 --log 时才写）
+```
+
+`data/gen/` 与 `data/state/` 可再生；`site/`、`admin/site/`、`data/appdata/`、`archive/` 要备份。
+
+---
+
+## 2. 安装
+
+### 2.1 一条命令（推荐）
+
+```bash
+git clone git@github.com:Six-Fifteenths/Nac.git && cd Nac
+cargo build --release          # 或在有 Rust 的机器上构建后传 target/release/
+sudo ./deploy/install.sh
+```
+
+`install.sh` 做的事（幂等，可以反复跑）：
+
+1. 建系统用户 `nac`（`nologin`，家目录指向 `/srv/nac`）
+2. 装 `contentd`、`publish` 到 `/srv/nac/bin`
+3. 同步 `site/` → `/srv/nac/site`、`admin/site/` → `/srv/nac/admin/site`
+4. 以 `nac` 身份发布两套站点（`--archive` 给公开站点）
+5. 把 `deploy/*.service` 里的 `/srv/nac` 替换成 `--dest` 指定目录后装进 `/etc/systemd/system`
+6. `systemctl enable --now nac-contentd nac-console`
+7. 自检：`is-active`、`ss -ltnp`、用一个裸帧向 7000 取一次 manifest
+
+参数：
+
+| 参数 | 默认 | 说明 |
+|---|---|---|
+| `--dest` | `/srv/nac` | 安装目录 |
+| `--user` | `nac` | 以哪个用户跑服务 |
+| `--from` | `target/release` | 二进制来源目录 |
+| `--bind-public` | 关 | 公开站点改绑 `0.0.0.0`，**会暴露服务器 IP** |
+
+### 2.2 手工步骤（脚本看不懂时对照）
+
+```bash
+sudo useradd -r -s /usr/sbin/nologin -d /srv/nac nac
+sudo mkdir -p /srv/nac/bin /srv/nac/admin
+sudo install -m 0755 target/release/contentd target/release/publish /srv/nac/bin/
+sudo cp -r site /srv/nac/site
+sudo cp -r admin/site /srv/nac/admin/site
+sudo chown -R nac:nac /srv/nac
+sudo -u nac /srv/nac/bin/publish --site /srv/nac/site --data /srv/nac/data --archive /srv/nac/archive
+sudo -u nac /srv/nac/bin/publish --site /srv/nac/admin/site --data /srv/nac/admin/data
+sudo cp deploy/nac-contentd.service deploy/nac-console.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now nac-contentd nac-console
+```
+
+---
+
+## 3. 两个服务
+
+| unit | 端口 | 绑定 | 用途 |
+|---|---|---|---|
+| `nac-contentd.service` | 7000 | `127.0.0.1` | 公开站点，带 `--log` 与 `--session-ttl-hours 168` |
+| `nac-console.service` | 7001 | `127.0.0.1` | 运营台，额外传 `NAC_ROOT`、`NAC_LOG` |
+
+两个 unit 都带 `Restart=always`、`NoNewPrivileges=yes`、`ProtectSystem=full`、
+`ProtectHome=yes`、`PrivateTmp=yes`。
+
+**默认只绑回环，所以装完外人是连不上的。** 这是"不把 IP 交出去"的当前状态：
+
+- 想让普通用户访问 → 必须先定传输层（Tor / 自建中继），**当前未实现**；
+- 临时直连演示 → `sudo ./deploy/install.sh --bind-public`，再在防火墙放行 7000。
+  这时任何抓到连接的人都知道服务器 IP，`nac.routes` 的遮掩也失效。
+
+改完 unit 记得：
+
+```bash
+sudo systemctl daemon-reload && sudo systemctl restart nac-contentd
+```
+
+---
+
+## 4. 运营台怎么远程用
+
+服务器上运营台只监听 `127.0.0.1:7001`，用 SSH 隧道拉到自己电脑：
+
+```bash
+ssh -N -L 7001:127.0.0.1:7001 用户@服务器
+```
+
+固化到 `~/.ssh/config`：
+
+```
+Host nac
+  HostName 服务器
+  User 用户
+  LocalForward 7001 127.0.0.1:7001
+  ServerAliveInterval 30
+```
+
+本机客户端（`viewer`）的 `nac.routes` 加一行，用 `viewer --routes-encode 127.0.0.1:7001`
+生成那条 base64：
+
+```
+*home   MTI3LjAuMC4xOjcwMDA=
+console MTI3LjAuMC4xOjcwMDE=
+```
+
+然后在客户端地址栏输 `console/1`。
+
+注意事项：
+
+- **不要写 `-R`**（那是反向转发）。`-L` 才是"我这边 → 服务器"。
+- **不要加 `-g`**，那会让本机端口对局域网开放。
+- 每个请求一条新 SSH 通道；图片按 16 KB 分片，多图会多次往返。
+- 隧道断了客户端显示"无法连接"，重连即恢复。
+
+运营台没有登录，判断依据是单人 VPS：`127.0.0.1` 是网络位置而不是认证，
+能在这台机器上执行命令的人本来就能直接改 `data/`，再加口令只是重复 SSH 的工作，
+还会把明文口令留在磁盘上。**如果将来变成多人共享、或要绑非回环地址，就必须重新考虑**，
+届时优先选"按需启动"或改 Unix socket，而不是加明文口令。
+
+---
+
+## 5. 上线清单
+
+服务器上：
+
+1. `systemctl is-active nac-contentd nac-console` → 两个 `active`
+2. `ss -ltnp | grep 700` → 只有 `127.0.0.1:7000`、`127.0.0.1:7001`（用了 `--bind-public` 才有 `0.0.0.0:7000`）
+3. `journalctl -u nac-contentd -n 20` → 没有反复重启、没有 `bind` 失败
+4. `cd /srv/nac && bin/publish --site site --data data` → `published <代> (N pages, M images)`
+   （注意：以 `nac` 身份跑，`sudo -u nac ...`，否则产物属主会变成 root）
+5. `tail -f /srv/nac/access.jsonl` → 取一次页，应出现一行 JSON
+6. firewall：只留 SSH。传输层未定之前不开 7000
+
+自己电脑：
+
+7. `ssh -N -L 7001:127.0.0.1:7001 用户@服务器`
+8. `viewer --routes-check` → 应显示 `home` 与 `console`
+9. `console/1` 看概览、`console/5` 看访问统计（应能看到第 5 步产生的记录）
+10. 在运营台第 2 页点"发布"→ 公开站点立刻更新（**不需要重启服务**）
+
+---
+
+## 6. 日常操作
+
+| 想做的事 | 做法 |
+|---|---|
+| 改内容 | 改 `site/*.py` → `sudo -u nac /srv/nac/bin/publish --site /srv/nac/site --data /srv/nac/data` |
+| 改完立刻生效吗 | 是。`contentd` 每次请求都重读 `data/current`，不用重启 |
+| 回滚 | 把 `data/current` 里的代名改成旧代（`data/gen/` 保留最近 5 代） |
+| 改运营台 | 改 `admin/site/*.py` → `publish --site admin/site --data admin/data` |
+| 看实时访问 | 运营台第 5 页，或 `tail -f access.jsonl` |
+| 清空所有数据 | 停服务 → 删 `data/appdata/` → 起服务 |
+| 重启 | `sudo systemctl restart nac-contentd` |
+
+---
+
+## 7. 日志、清理、备份
+
+**访问日志**（`--log`）没有内建轮转，加一个 logrotate：
+
+```
+/srv/nac/access.jsonl {
+    weekly
+    rotate 8
+    compress
+    missingok
+    notifempty
+    copytruncate
+}
+```
+
+**会话文件**：`--session-ttl-hours`（默认 168 小时），后台线程启动时与每 10 分钟清一次；
+`data/state/tmp/` 里崩溃残留的临时会话 1 小时后清掉。不需要手工维护。
+
+**代目录**：`publish` 自动保留最近 5 代，更早的自动删除。
+
+**备份**（只需这四样，其余可再生）：
+
+```bash
+tar czf nac-$(date +%F).tgz \
+    -C /srv/nac site admin/site data/appdata archive
+```
+
+---
+
+## 8. 升级
+
+```bash
+cd Nac && git pull
+cargo build --release
+sudo ./deploy/install.sh        # 会重新装二进制、同步源码、重新发布、重启服务
+```
+
+`install.sh` 不会删 `data/`、`admin/data/`、`archive/`，所以会话、留言、归档都留着。
+
+---
+
+## 9. 排障
+
+| 症状 | 先看什么 |
+|---|---|
+| 客户端"无法连接到服务器" | `systemctl is-active nac-contentd`；`ss -ltnp \| grep 7000`；`--bind` 是不是回环 |
+| 某页始终空白 | `journalctl -u nac-contentd -n 50` 有 Python 报错；页面是否超时 2 秒、输出超 128 KB、页面超 16 KB |
+| 改了内容没生效 | 有没有重新 `publish`；`cat data/current` 是不是新代；运营台第 1 页显示当前代 |
+| 发布报"页号被用了两次" | `data` 或 `archive` 目录落在 `site` 里面 |
+| 发布报 `SyntaxError` | 就是那一页的 Python 语法错，按提示的行号改 |
+| 图片不显示 | `nac.img()` 路径要和 `site/` 下一致；`journalctl` 里会有 `KeyError` |
+| 运营台打不开 | 隧道是否建好；`nac.routes` 里有没有 `console`；7001 是否 active |
+| 日志不增长 | `contentd` 启动时有没有给 `--log`；unit 里路径是否可写（属主 `nac`） |
+| 会话文件暴涨 | 检查 `--session-ttl-hours`；每个新客户端一个文件，属正常 |
+
+定位 Python 页面问题最直接的方式：在服务器上手动跑一次
+
+```bash
+cd /srv/nac/data/gen/$(cat /srv/nac/data/current)/scripts
+sudo -u nac NAC_DATA_DIR=/tmp/nacprobe NAC_SESSION_FILE=/tmp/nacprobe.json \
+    NAC_INPUT='{"page":7,"fields":{}}' python3 -B 7.py
+```
+
+输出就是页面内容；报错直接看栈。

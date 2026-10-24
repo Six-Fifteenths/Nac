@@ -1,0 +1,27 @@
+[Unit]
+Description=nac content server (public site)
+After=network.target
+
+[Service]
+Type=simple
+User=nac
+Group=nac
+WorkingDirectory=/srv/nac
+# 只监听回环：对外的入口是隧道或中继，不是这个端口。
+ExecStart=/srv/nac/bin/contentd \
+    --data /srv/nac/data \
+    --port 7000 \
+    --bind 127.0.0.1 \
+    --log /srv/nac/access.jsonl \
+    --session-ttl-hours 168
+Restart=always
+RestartSec=2
+
+# 页面脚本是 Python，会写 data/ 与 appdata/；其余路径只读。
+NoNewPrivileges=yes
+ProtectSystem=full
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

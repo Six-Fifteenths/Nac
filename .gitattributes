@@ -1,0 +1,13 @@
+# 仓库里统一用 LF：install.sh 的 shebang 一旦变成 CRLF 在 Linux 上就跑不起来。
+* text=auto eol=lf
+
+*.sh    text eol=lf
+*.py    text eol=lf
+*.rs    text eol=lf
+*.toml  text eol=lf
+*.md    text eol=lf
+*.tmpl  text eol=lf
+*.service text eol=lf
+*.routes text eol=lf
+
+*.png binary

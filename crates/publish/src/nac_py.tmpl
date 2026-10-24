@@ -1,0 +1,367 @@
+"""nac —— 页面辅助库（由 publish 每代生成，不要手改这个文件）。
+
+一个页面就是一个 Python 程序：import nac，用下面的函数拼内容，最后 nac.done()。
+
+分类索引
+--------
+A. 本代常量        PAGES / IMAGES
+B. 文本与转义      esc, b, i, tt
+C. 块级排版        h1 h2 h3, p, quote, bullets, code, gap, raw
+D. 布局            cols, col
+E. 媒体            img
+F. 导航            link, redirect, first_page
+G. 表单            form, field, password, button
+H. 请求            request, fields, field_of, page_id
+I. 会话            session, save_session, session_get, session_set
+J. 站点数据        data_dir, data_path, read_json, write_json,
+                   read_lines, append_line, counter
+K. 输出            done, flush
+
+约定
+----
+* 只有 C/D/E/F/G 里的函数会写内容，其余都是读环境、读文件或工具函数。
+* 需要本库没覆盖的排版时用 raw()，直接写一行线上标记。
+* 所有写文件的操作都是原子的（先写临时文件再 os.replace）。
+"""
+
+import atexit
+import json
+import os
+import sys
+import time
+from contextlib import contextmanager
+from pathlib import Path
+
+# --------------------------------------------------------------- A. 本代常量
+
+#: 本代所有页号，例如 (1, 2, 3, 7)
+PAGES = @PAGES@
+
+#: 本代图片表：相对路径 -> (图片 id, 宽, 高)
+IMAGES = @IMAGES@
+
+_buf = []
+_flushed = False
+
+
+# ----------------------------------------------------------- B. 文本与转义
+
+def esc(text):
+    """把任意文本变成不会被当成标记的文面。"""
+    out = []
+    for ch in str(text):
+        if ch in "\\*_`[]":
+            out.append("\\" + ch)
+        elif ch == "\n":
+            out.append(" ")
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
+def b(text):
+    """粗体。"""
+    return "*" + esc(text) + "*"
+
+
+def i(text):
+    """斜体。"""
+    return "_" + esc(text) + "_"
+
+
+def tt(text):
+    """等宽，适合放字段名、路径、代码片段。"""
+    return "`" + esc(text) + "`"
+
+
+# ------------------------------------------------------------- C. 块级排版
+
+def raw(line):
+    """原样写一行标记，兜底用。"""
+    _buf.append(str(line))
+
+
+def h1(text):
+    _buf.append("# " + esc(text))
+
+
+def h2(text):
+    _buf.append("## " + esc(text))
+
+
+def h3(text):
+    _buf.append("### " + esc(text))
+
+
+def p(*parts):
+    """段落。参数按顺序拼接，可以直接塞 b()/i()/tt() 的返回值。"""
+    _buf.append("".join(str(x) for x in parts))
+
+
+def quote(*parts):
+    """引用。连续调用会合成一个引用块。"""
+    _buf.append("> " + "".join(str(x) for x in parts))
+
+
+def bullets(*items):
+    """无序列表，一项一行。"""
+    for item in items:
+        _buf.append("- " + esc(item))
+
+
+def code(text):
+    """等宽块，保留换行。"""
+    for line in str(text).splitlines() or [""]:
+        _buf.append("| " + line)
+
+
+def gap():
+    """空行：分段、拉开间距。"""
+    _buf.append("")
+
+
+# ----------------------------------------------------------------- D. 布局
+
+def col():
+    """在 with nac.cols(...) 里强制换到下一列。"""
+    _buf.append("[[col]]")
+
+
+@contextmanager
+def cols(n=2):
+    """并排排版。
+
+        with nac.cols(2):
+            nac.h2("左")
+            nac.bullets("甲", "乙")
+            nac.col()
+            nac.h2("右")
+            nac.p("另一边")
+
+    不写 nac.col() 时按块数平均切；写了就按你给的位置切（此时 n 被忽略）。
+    最多 4 列。
+    """
+    global _buf
+    outer, _buf = _buf, []
+    try:
+        yield
+    finally:
+        inner, _buf = _buf, outer
+        outer.append("[[cols %d]]" % max(1, min(4, int(n))))
+        outer.extend(inner)
+        outer.append("[[end]]")
+
+
+# ----------------------------------------------------------------- E. 媒体
+
+def img(path, width=None):
+    """插入图片。
+
+    path 是 site/ 里的相对路径，例如 "img/plan.png"；
+    width 是显示宽度百分比，省略即 100%。
+    图片自带真实宽高，客户端会先按比例预留位置，图到了不跳。
+    """
+    if path not in IMAGES:
+        raise KeyError("没有这张图片：%s（这代里有：%s）" % (path, ", ".join(sorted(IMAGES))))
+    ident, w, h = IMAGES[path]
+    line = "!img %d" % ident
+    if width:
+        line += " %d%%" % int(width)
+    if w and h:
+        line += " %dx%d" % (w, h)
+    _buf.append(line)
+
+
+# ----------------------------------------------------------------- F. 导航
+
+def _cell(text):
+    """标记里有三个容器字符不能出现在标签与链接文字里。"""
+    return str(text).replace("|", "／").replace("]]", "]").replace("\n", " ")
+
+
+def link(page, text):
+    """指向另一页。页号不存在时整行不显示，省得点进空白。"""
+    page = int(page)
+    if page in PAGES:
+        _buf.append("[[%d|%s]]" % (page, _cell(text)))
+
+
+def redirect(page):
+    """立刻跳转到另一页；本页已拼好的内容会被丢弃。"""
+    global _flushed
+    page = int(page)
+    if page in PAGES:
+        _flushed = True
+        print("@@REDIRECT %d" % page)
+        raise SystemExit(0)
+
+
+def first_page():
+    """本代最小的页号，用来做回首页。"""
+    return min(PAGES) if PAGES else None
+
+
+# ----------------------------------------------------------------- G. 表单
+
+def form(page):
+    """声明接下来的字段提交给第几页。"""
+    _buf.append("[[form %d]]" % int(page))
+
+
+def field(name, label="", secret=False):
+    """单行输入框。secret=True 时输入内容不显示。"""
+    name = _cell(name)
+    label = _cell(label) or name
+    _buf.append("[[%s %s|%s]]" % ("secret" if secret else "input", name, label))
+
+
+def password(name, label=""):
+    """密码输入框（field 的简写）。"""
+    field(name, label, secret=True)
+
+
+def button(label):
+    """提交按钮。一页里最后一个按钮决定提交目标，通常只放一个。"""
+    _buf.append("[[button %s]]" % _cell(label))
+
+
+# ----------------------------------------------------------------- H. 请求
+
+def request():
+    """原始请求：{"page": 页号, "fields": {...}}。"""
+    return json.loads(os.environ.get("NAC_INPUT") or "{}")
+
+
+def fields():
+    """本次提交上来的字段字典（没提交时为空）。"""
+    return dict(request().get("fields") or {})
+
+
+def field_of(name, default=""):
+    """取一个字段并去掉首尾空白。"""
+    value = fields().get(name)
+    if value is None:
+        return default
+    return value.strip() if isinstance(value, str) else value
+
+
+def page_id():
+    """当前页号。"""
+    value = os.environ.get("NAC_PAGE")
+    if value:
+        return int(value)
+    return request().get("page")
+
+
+# ----------------------------------------------------------------- I. 会话
+
+def _session_path():
+    path = os.environ.get("NAC_SESSION_FILE")
+    return Path(path) if path else None
+
+
+def session():
+    """本次会话的状态字典（跨页、跨请求保存）。"""
+    path = _session_path()
+    if path and path.exists():
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+    return {}
+
+
+def save_session(state):
+    """写回会话状态。"""
+    path = _session_path()
+    if path:
+        _atomic_write(path, json.dumps(state, ensure_ascii=False))
+
+
+def session_get(key, default=None):
+    return session().get(key, default)
+
+
+def session_set(key, value):
+    state = session()
+    state[key] = value
+    save_session(state)
+
+
+# ------------------------------------------------------------- J. 站点数据
+
+def data_dir():
+    """站点私有目录（data/appdata）。数据库、上传、日志都放这里。"""
+    path = Path(os.environ["NAC_DATA_DIR"])
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def data_path(name):
+    """站点私有目录里的一个文件路径。"""
+    return data_dir() / name
+
+
+def _atomic_write(path, text):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def read_json(name, default=None):
+    """读 data_dir 里的 JSON 文件；不存在或坏掉就返回默认值。"""
+    path = data_path(name)
+    if not path.exists():
+        return default
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return default
+
+
+def write_json(name, value):
+    """原子写 JSON 文件（先写 .tmp 再替换，断电不会留半截）。"""
+    _atomic_write(data_path(name), json.dumps(value, ensure_ascii=False, indent=1))
+
+
+def read_lines(name):
+    """读文本文件的行；不存在就是空列表。"""
+    path = data_path(name)
+    if not path.exists():
+        return []
+    return path.read_text(encoding="utf-8").splitlines()
+
+
+def append_line(name, text):
+    """往文本文件追加一行（换行会被压成空格）。"""
+    with open(data_path(name), "a", encoding="utf-8") as fh:
+        fh.write(str(text).replace("\n", " ") + "\n")
+
+
+def counter(name, step=1):
+    """存取一个计数，返回变化后的值。第一次从 0 开始。"""
+    state = read_json(name, {"n": 0}) or {}
+    current = int(state.get("n", 0)) + int(step)
+    write_json(name, {"n": current, "at": int(time.time())})
+    return current
+
+
+# ----------------------------------------------------------------- K. 输出
+
+def done():
+    """结束页面。不调用也会在进程退出时自动输出。"""
+    flush()
+
+
+def flush():
+    global _flushed
+    if _flushed:
+        return
+    _flushed = True
+    sys.stdout.write("\n".join(_buf) + "\n")
+    sys.stdout.flush()
+
+
+atexit.register(flush)
