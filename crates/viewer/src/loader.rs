@@ -5,6 +5,7 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::thread;
 
 use crate::net::Client;
+use crate::routes::TlsMode;
 
 pub struct Loaded {
     pub id: u16,
@@ -26,12 +27,12 @@ pub struct Loader {
 }
 
 impl Loader {
-    pub fn new(addr: String) -> Self {
+    pub fn new(addr: String, tls: TlsMode) -> Self {
         let (req_tx, req_rx) = channel::<u16>();
         let (msg_tx, msg_rx) = channel::<Msg>();
 
         thread::spawn(move || {
-            let mut client = Client::new(addr);
+            let mut client = Client::with_tls(addr, tls);
             while let Ok(id) = req_rx.recv() {
                 let msg = match client.image(id) {
                     Ok(bytes) => match image::load_from_memory(&bytes) {

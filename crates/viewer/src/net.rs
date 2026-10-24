@@ -2,6 +2,7 @@ use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::time::Duration;
 
+use crate::routes::TlsMode;
 use crate::tls::ReadWrite;
 
 use protocol::{decode_server, encode_client, ClientMsg, Request, ServerMsg, SESSION_LEN};
@@ -18,13 +19,15 @@ pub struct Entry {
 pub struct Client {
     pub addr: String,
     pub session: [u8; SESSION_LEN],
+    tls: TlsMode,
 }
 
 impl Client {
-    pub fn new(addr: impl Into<String>) -> Self {
+    pub fn with_tls(addr: impl Into<String>, tls: TlsMode) -> Self {
         Self {
             addr: addr.into(),
             session: [0u8; SESSION_LEN],
+            tls,
         }
     }
 
@@ -32,7 +35,7 @@ impl Client {
         let stream = TcpStream::connect(&self.addr).map_err(|_| ())?;
         stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
         stream.set_write_timeout(Some(Duration::from_secs(5))).ok();
-        let mut stream = crate::tls::wrap(stream)?;
+        let mut stream = crate::tls::wrap(stream, self.tls)?;
 
         let msg = ClientMsg {
             session: self.session,

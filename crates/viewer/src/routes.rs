@@ -18,11 +18,24 @@ pub const DEFAULT_PORT: &str = "7000";
 
 include!(concat!(env!("OUT_DIR"), "/embedded.rs"));
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum TlsMode {
+    /// Use TLS when the build carries a certificate pin, plaintext otherwise.
+    #[default]
+    Auto,
+    /// Force TLS; fails if this build has no pin.
+    On,
+    /// Force plaintext. Needed for a loopback service reached through an SSH
+    /// tunnel, which the client must not wrap in TLS.
+    Off,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Site {
     pub name: String,
     pub endpoint: String,
     pub default: bool,
+    pub tls: TlsMode,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -51,10 +64,17 @@ impl Routes {
                 None => token.to_string(),
             };
             let endpoint = with_default_port(endpoint);
+            // Third token, optional: `tls` or `plain`. Absent means Auto.
+            let tls = match parts.next() {
+                Some("tls") => TlsMode::On,
+                Some("plain") => TlsMode::Off,
+                _ => TlsMode::Auto,
+            };
             sites.push(Site {
                 name: name.to_string(),
                 endpoint,
                 default,
+                tls,
             });
         }
         if !sites.iter().any(|s| s.default) {
@@ -71,6 +91,7 @@ impl Routes {
                 name: name.to_string(),
                 endpoint: with_default_port(endpoint.to_string()),
                 default: true,
+                tls: TlsMode::Auto,
             }],
         }
     }
@@ -233,5 +254,25 @@ site.test:9000
         let routes = Routes::parse("only  example.test\n");
         assert_eq!(routes.default_site().map(|s| s.name.as_str()), Some("only"));
         assert_eq!(routes.sites[0].endpoint, "example.test:7000");
+        assert_eq!(routes.sites[0].tls, TlsMode::Auto);
+    }
+
+    #[test]
+    fn per_site_tls_mode_is_parsed() {
+        let text = "\
+*home   MTk5LjcuMTQwLjIxNzo3MDAw   tls
+console MTI3LjAuMC4xOjcwMDE=        plain
+local   MTI3LjAuMC4xOjcwMDA=
+";
+        let routes = Routes::parse(text);
+        assert_eq!(routes.get("home").unwrap().tls, TlsMode::On);
+        assert_eq!(routes.get("console").unwrap().tls, TlsMode::Off);
+        assert_eq!(routes.get("local").unwrap().tls, TlsMode::Auto);
+    }
+
+    #[test]
+    fn unknown_flag_falls_back_to_auto() {
+        let routes = Routes::parse("home  MTI3LjAuMC4xOjcwMDA=  whatever\n");
+        assert_eq!(routes.get("home").unwrap().tls, TlsMode::Auto);
     }
 }

@@ -3,17 +3,25 @@
 # 复制成 nac.routes 再改。nac.routes 不进仓库，真正的端点只写在那里。
 # 用户只看到显示域名（nac.local）和路径，看不到也输不进主机地址。
 #
-# 生成一条：  viewer --routes-encode 你的主机:端口
-# 检查解码：  viewer --routes-check
+# 格式：[*]名字<空白>端点[<空白>tls|plain]
+#   端点      用 `viewer --routes-encode 主机:端口` 生成（base64，只是不显眼，不是加密）
+#   第三个字段可省略：
+#               tls    强制 TLS（构建时必须带 NAC_TLS_PIN）
+#               plain  强制明文（回环服务、走 SSH 隧道时用）
+#               省略   本构建有 pin 就用 TLS，没有就用明文
+#   带 * 的是默认站点，打开客户端就落在它上面。
 #
-# 带 * 的是默认站点，打开客户端就落在它上面。
+# 检查：  viewer --routes-check    （会列出每个站点的 auto/tls/plain）
 #
 # 注意：这不是加密。客户端要直连服务器就必须知道服务器在哪里，
 # 所以本文件只是让端点不显眼而已。真正的"看不到我的 IP"属于传输层，
 # 要等 Tor / 中继方案落地。
 
-*home   MTI3LjAuMC4xOjcwMDA=
+*home   MTI3LjAuMC4xOjcwMDA=   plain
 
-# 运营台：在服务器上只监听 127.0.0.1:7001，用 ssh -L 7001:127.0.0.1:7001 转发过来。
-# 地址栏里输入 console.nac.local/ 就切过去。
-console MTI3LjAuMC4xOjcwMDE=
+# 运营台：服务器上只监听 127.0.0.1:7001，用 ssh -L 7001:127.0.0.1:7001 转发过来，
+# 所以是明文。地址栏里输入 console.nac.local/ 就切过去。
+console MTI3LjAuMC4xOjcwMDE=   plain
+
+# 公网站点（服务器开了 TLS 时）：
+# *home   MTk5LjcuMTQwLjIxNzo3MDAw   tls

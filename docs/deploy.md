@@ -280,7 +280,7 @@ sudo ./deploy/install.sh        # 会重新装二进制、同步源码、重新�
 | 发布报"路径被用了两次" | 两个页面路径相同，或 `data`/`archive` 落在 `site` 里面 |
 | 发布报 `SyntaxError` | 就是那一页的 Python 语法错，按提示的行号改 |
 | 图片不显示 | `nac.img()` 路径要和 `site/` 下一致；`journalctl` 里会有 `KeyError` |
-| 运营台打不开 | 隧道是否建好；客户端是否加了 `--plaintext --addr 127.0.0.1:17001`；7001 是否 active |
+| 运营台打不开 | 隧道是否建好；客户端 `nac.routes` 里 console 站点是否标了 `plain`；7001 是否 active |
 | 日志不增长 | `contentd` 启动时有没有给 `--log`；unit 里路径是否可写（属主 `nac-public`） |
 | 会话文件暴涨 | 检查 `--session-ttl-hours`；每个新客户端一个文件，属正常 |
 

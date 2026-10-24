@@ -303,10 +303,16 @@ HiddenServicePort 80 127.0.0.1:7000
 
 ```
 # 生成一条：viewer --routes-encode 主机:端口
-# 检查解码：viewer --routes-check
-*home   MTI3LjAuMC4xOjcwMDA=
+# 检查：    viewer --routes-check
+*home   MTI3LjAuMC4xOjcwMDA=   plain
 ```
 
+格式：`[*]名字<空白>端点[<空白>tls|plain]`
+
+- 第三个字段可省略：省略＝本构建有证书 pin 就用 TLS，没有就明文。
+  `tls` 强制加密（构建里没有 pin 时会在启动时明确警告，并连不上）；`plain` 强制明文。
+- 因为加密是按站点决定的，**同一个客户端可以同时开公网（TLS）与运营台（隧道明文）**，
+  不需要 `--plaintext`、也不需要两个构建。`--plaintext` 仍保留为全局应急开关。
 - 查找顺序：`--routes <路径>` → `NAC_ROUTES` → 可执行文件同目录 → 当前目录。
 - 带 `*` 的站点是默认站点；没有 `*` 时第一条算默认。
 - 端点用 base64 存，避免文件一眼读成地址。**这不是加密**：客户端要直连就必须知道端点，能动手的人总能拿到。

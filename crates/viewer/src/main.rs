@@ -81,16 +81,48 @@ fn main() -> eframe::Result<()> {
     }
 
     let (routes, from_embedded) = build_routes(routes_path.as_deref(), addr);
+
+    // A site marked `tls` cannot work without a pin, and the failure would
+    // otherwise show up only as "cannot connect". Say it once, up front.
+    if !plaintext && !tls::has_pin() {
+        let forced: Vec<&str> = routes
+            .sites
+            .iter()
+            .filter(|s| s.tls == routes::TlsMode::On)
+            .map(|s| s.name.as_str())
+            .collect();
+        if !forced.is_empty() {
+            eprintln!(
+                "注意：站点 {} 要求 TLS，但这份构建没有证书 pin（NAC_TLS_PIN）——这些站点会连不上。",
+                forced.join(", ")
+            );
+        }
+    }
+
     if list_sites {
         for site in &routes.sites {
             if from_embedded {
-                println!("{}{}", if site.default { "*" } else { " " }, site.name);
-            } else {
                 println!(
                     "{}{}\t{}",
                     if site.default { "*" } else { " " },
                     site.name,
-                    site.endpoint
+                    match site.tls {
+                        routes::TlsMode::Auto => "auto",
+                        routes::TlsMode::On => "tls",
+                        routes::TlsMode::Off => "plain",
+                    }
+                );
+            } else {
+                println!(
+                    "{}{}\t{}\t{}",
+                    if site.default { "*" } else { " " },
+                    site.name,
+                    site.endpoint,
+                    match site.tls {
+                        routes::TlsMode::Auto => "auto",
+                        routes::TlsMode::On => "tls",
+                        routes::TlsMode::Off => "plain",
+                    }
                 );
             }
         }
@@ -163,7 +195,7 @@ fn selftest_run(routes: &routes::Routes, site_name: &str) -> eframe::Result<()> 
         println!("site {site_name}: missing");
         return Ok(());
     };
-    let mut client = net::Client::new(site.endpoint.clone());
+    let mut client = net::Client::with_tls(site.endpoint.clone(), site.tls);
     match client.hello() {
         Ok(version) => println!("protocol: {version}"),
         Err(()) => println!("protocol: legacy"),
@@ -450,9 +482,10 @@ impl Viewer {
             .get(&site)
             .map(|s| s.endpoint.clone())
             .unwrap_or_default();
+        let tls = routes.get(&site).map(|s| s.tls).unwrap_or_default();
 
         let mut v = Self {
-            fetcher: fetch::Fetcher::new(endpoint.clone()),
+            fetcher: fetch::Fetcher::new(endpoint.clone(), tls),
             loading: false,
             routes,
             site,
@@ -469,7 +502,7 @@ impl Viewer {
             failed: false,
             error: String::new(),
             scroll_top: true,
-            loader: loader::Loader::new(endpoint),
+            loader: loader::Loader::new(endpoint, tls),
             last_title: String::new(),
             focus_input: false,
             addr_input: String::new(),
@@ -563,9 +596,10 @@ impl Viewer {
             .get(&site)
             .map(|s| s.endpoint.clone())
             .unwrap_or_default();
+        let tls = self.routes.get(&site).map(|s| s.tls).unwrap_or_default();
         self.site = site;
-        self.fetcher = fetch::Fetcher::new(endpoint.clone());
-        self.loader = loader::Loader::new(endpoint);
+        self.fetcher = fetch::Fetcher::new(endpoint.clone(), tls);
+        self.loader = loader::Loader::new(endpoint, tls);
         self.textures.clear();
         self.entries.clear();
         self.history.clear();

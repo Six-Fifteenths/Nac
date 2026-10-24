@@ -7,5 +7,9 @@
 *.log
 access.jsonl
 
+# 本机部署相关的值（每个部署不同，不进仓库）
+# 证书 pin：服务器 /etc/ssl/nac/public.pin，重建 viewer 时要用
+/nac.tls-pin
+
 # 只作参考的上游项目（第三方代码，不进本仓库）
 /gurted

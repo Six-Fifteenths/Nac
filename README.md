@@ -32,12 +32,21 @@ cp nac.routes.example nac.routes
 
 窗口里应该看到《白塔》，地址栏是 `nac.local/`。详细步骤见运营指南。
 
+`nac.routes` 每行第三列说明这条连接怎么加密：
+
+```
+*home    MTk5LjcuMTQwLjIxNzo3MDAw   tls     # 公网，自签证书 + pin
+console  MTI3LjAuMC4xOjcwMDE=       plain   # 运营台，走 SSH 隧道，回环明文
+```
+
+`viewer --routes-check` 会列出每个站点的 `auto` / `tls` / `plain`。
+
 ## 状态
 
 | 部分 | 状态 |
 |---|---|
 | protocol / viewer / contentd / publish / probe | 可用，协议 v3：版本握手、清单路径、图片流式分片 |
-| TLS（公开站） | 自签证书 + 客户端固定；管理端仍为回环明文 |
+| TLS（公开站） | 自签证书 + 客户端固定；管理端仍为回环明文。加密按站点声明（`nac.routes` 第三列 `tls` / `plain`），一个客户端可同时连两边 |
 | 发布 | 原子切换 `current`；路径路由、目录首页、静态页预渲染 |
 | 运维 | systemd 沙箱、分用户、资源上限、健康检查、每日备份 |
 | 测试 | `cargo test --workspace` |

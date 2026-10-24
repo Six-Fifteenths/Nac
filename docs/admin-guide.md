@@ -76,13 +76,22 @@ cargo build --release --target x86_64-pc-windows-gnu -p viewer --features window
 ssh -N -L 17001:127.0.0.1:7001 root@服务器
 ```
 
-Windows 上运行同一个客户端，但加 `--plaintext` 指向隧道：
+隧道这一端是明文，所以在 `nac.routes` 里给运营台站点标上 `plain`：
 
-```powershell
-.\NacViewer.exe --plaintext --addr 127.0.0.1:17001
+```
+*home   MTk5LjcuMTQwLjIxNzo3MDAw   tls
+console MTI3LjAuMC4xOjE3MDAx       plain
 ```
 
-地址栏会显示 `nac.local/`（如果用多站点 `nac.routes`，则是 `console.nac.local/`）；直接输入路径即可：
+之后用同一个客户端打开即可，**不需要** `--plaintext`，也不需要第二个构建：
+
+```powershell
+.\NacViewer.exe --site console
+```
+
+（`--plaintext` 仍然存在，是"整个进程都不加密"的应急开关；正常情况用站点标记就够了。）
+
+地址栏会显示 `console.nac.local/`；直接输入路径即可：
 
 | 路径 | 页面 |
 |---|---|
@@ -145,7 +154,7 @@ Windows 上运行同一个客户端，但加 `--plaintext` 指向隧道：
 | 现象 | 先看 |
 |---|---|
 | 客户端连不上 | `ss -ltnp \| grep 7000`、`journalctl -u nac-contentd`、pin 是否匹配 |
-| 运营台打不开 | 隧道是否在；`--plaintext` 是否加了；7001 是否监听 |
+| 运营台打不开 | 隧道是否在；`nac.routes` 里 console 是否标了 `plain`；7001 是否监听 |
 | 发布按钮失败 | 运营台能否写 `data/`；`journalctl -u nac-console` |
 | 页面空白 | `journalctl -u nac-contentd` 里的 Python 报错、页面是否超时/超 16KB |
 | 日志不增长 | unit 里 `--log` 路径；`data/` 是否可写；logrotate 配置 |

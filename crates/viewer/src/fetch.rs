@@ -10,6 +10,7 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::thread;
 
 use crate::net::{Client, Entry};
+use crate::routes::TlsMode;
 
 pub enum Job {
     Manifest,
@@ -31,12 +32,12 @@ pub struct Fetcher {
 }
 
 impl Fetcher {
-    pub fn new(addr: String) -> Self {
+    pub fn new(addr: String, tls: TlsMode) -> Self {
         let (job_tx, job_rx) = channel::<Job>();
         let (msg_tx, msg_rx) = channel::<Msg>();
 
         thread::spawn(move || {
-            let mut client = Client::new(addr);
+            let mut client = Client::with_tls(addr, tls);
             let mut entries: HashMap<u16, Entry> = HashMap::new();
             let mut static_cache: HashMap<u16, (u64, String)> = HashMap::new();
             while let Ok(job) = job_rx.recv() {

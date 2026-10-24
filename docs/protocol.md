@@ -104,11 +104,14 @@
 ```
 # 生成一条：viewer --routes-encode 主机:端口
 # 检查解码：viewer --routes-check
-*home   MTI3LjAuMC4xOjcwMDA=
-console MTI3LjAuMC4xOjcwMDE=
+*home   MTI3LjAuMC4xOjcwMDA=   plain
+console MTI3LjAuMC4xOjcwMDE=   tls
 ```
 
-- 格式：`[*]名字<空白>base64(主机:端口)`；带 `*` 的是默认站点；不含 `:` 时补 `:7000`。
+- 格式：`[*]名字<空白>base64(主机:端口)[<空白>tls|plain]`；带 `*` 的是默认站点；不含 `:` 时补 `:7000`。
+- 第三个字段决定这条连接怎么加密：`tls` 强制 TLS（构建里没有 pin 就启动时警告并连不上）、
+  `plain` 强制明文、省略则"有 pin 就用 TLS，没有就明文"。因此**加密是按站点而不是按进程决定**的，
+  一个客户端可以同时连公网 TLS 站点和隧道里的明文站点。
 - 查找顺序：`--routes` → `NAC_ROUTES` → **可执行文件同目录** → 当前目录 → 同名 `.example`。
 - 地址栏语法：`nac.local/`、`nac.local/about`、`/about`、`about`、`名字.nac.local/about`；旧的 `名字/7`、`nac://名字/7` 仍按内部页号解析；**真实主机地址被拒绝**。
 
