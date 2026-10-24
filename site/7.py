@@ -23,7 +23,7 @@ else:
     nac.p("还没有人留言。")
 
 nac.gap()
-nac.form(7)
+nac.form_path("/guestbook")
 nac.field("name", "你的名字")
 nac.button("留下")
 nac.gap()

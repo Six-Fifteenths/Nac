@@ -223,6 +223,7 @@ fn run(site: &Path, data: &Path, archive: Option<&Path>) -> Result<(), String> {
 
     let helper = NAC_PY
         .replace("@PAGES@", &page_list(&pages))
+        .replace("@PATHS@", &path_map(&pages))
         .replace("@IMAGES@", &image_map(&image_sizes));
     fs::write(gen_dir.join("scripts").join("nac.py"), helper).map_err(|e| e.to_string())?;
 
@@ -416,6 +417,18 @@ fn page_title(text: &str) -> Option<String> {
 fn page_list(pages: &BTreeMap<u16, PageSource>) -> String {
     let ids: Vec<String> = pages.keys().map(|id| id.to_string()).collect();
     format!("({})", ids.join(", "))
+}
+
+fn path_map(pages: &BTreeMap<u16, PageSource>) -> String {
+    let mut out = String::from("{");
+    for (i, (id, page)) in pages.iter().enumerate() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(&format!("{:?}: {}", page.url, id));
+    }
+    out.push('}');
+    out
 }
 
 fn image_map(images: &BTreeMap<String, (u16, u32, u32)>) -> String {

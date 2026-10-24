@@ -44,7 +44,7 @@ else:
     nac.p("还没有留言。")
 nac.gap()
 
-nac.form(3)
+nac.form_path("/data")
 nac.field("line", "要删的行号")
 nac.button("删除")
 nac.gap()

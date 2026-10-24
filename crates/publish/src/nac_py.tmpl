@@ -10,7 +10,7 @@ C. 块级排版        h1 h2 h3, p, quote, bullets, code, gap, raw
 D. 布局            cols, col
 E. 媒体            img
 F. 导航            link, link_path, redirect, first_page
-G. 表单            form, field, password, button
+G. 表单            form, form_path, field, password, button
 H. 请求            request, fields, field_of, page_id
 I. 会话            session, save_session, session_get, session_set
 J. 站点数据        data_dir, data_path, read_json, write_json,
@@ -36,6 +36,9 @@ from pathlib import Path
 
 #: 本代所有页号，例如 (1, 2, 3, 7)
 PAGES = @PAGES@
+
+#: 路径 -> 页号，例如 {"/": 1, "/second": 2}
+PATHS = @PATHS@
 
 #: 本代图片表：相对路径 -> (图片 id, 宽, 高)
 IMAGES = @IMAGES@
@@ -186,12 +189,14 @@ def link(page, text):
         _buf.append("[[%d|%s]]" % (page, _cell(text)))
 
 
+def _url(path):
+    path = str(path).strip()
+    return path if path.startswith("/") else "/" + path
+
+
 def link_path(path, text):
     """指向路径；目录用带尾斜杠的路径（如 /notes/）。"""
-    path = str(path).strip()
-    if not path.startswith("/"):
-        path = "/" + path
-    _buf.append("[[path:%s|%s]]" % (path, _cell(text)))
+    _buf.append("[[path:%s|%s]]" % (_url(path), _cell(text)))
 
 
 def redirect(page):
@@ -204,6 +209,13 @@ def redirect(page):
         raise SystemExit(0)
 
 
+def redirect_path(path):
+    """按路径立刻跳转；路径不存在时什么也不做。"""
+    page = PATHS.get(_url(path))
+    if page is not None:
+        redirect(page)
+
+
 def first_page():
     """本代最小的页号，用来做回首页。"""
     return min(PAGES) if PAGES else None
@@ -214,6 +226,13 @@ def first_page():
 def form(page):
     """声明接下来的字段提交给第几页。"""
     _buf.append("[[form %d]]" % int(page))
+
+
+def form_path(path):
+    """声明表单提交到某个路径；路径不存在时不设置表单。"""
+    page = PATHS.get(_url(path))
+    if page is not None:
+        form(page)
 
 
 def field(name, label="", secret=False):

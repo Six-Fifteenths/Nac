@@ -108,7 +108,7 @@ publish 每一代都重新生成 `scripts/nac.py`，其中把本代的页号表�
 | **D 布局** `cols(n)` `col()` | 并排（`with` 上下文） |
 | **E 媒体** `img(path, width)` | 图片 |
 | **F 导航** `link_path` `link` `redirect` `first_page` | 路径/页号跳转 |
-| **G 表单** `form` `field` `password` `button` | 输入与提交 |
+| **G 表单** `form` `form_path` `field` `password` `button` | 输入与提交 |
 | **H 请求** `request` `fields` `field_of` `page_id` | 本次请求 |
 | **I 会话** `session` `save_session` `session_get` `session_set` | 跨请求状态 |
 | **J 数据** `data_dir` `data_path` `read_json` `write_json` `read_lines` `append_line` `counter` | 站点私有目录里的文件 |

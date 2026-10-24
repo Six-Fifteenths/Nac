@@ -63,7 +63,7 @@ else:
     nac.p("还没有从运营台发布过。")
 nac.gap()
 
-nac.form(2)
+nac.form_path("/publish")
 nac.field("go", "写点什么都行，然后按下面的按钮")
 nac.button("发布")
 nac.gap()

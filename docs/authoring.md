@@ -35,6 +35,7 @@ nac.done()
 | 名字 | 内容 |
 |---|---|
 | `nac.PAGES` | 本代所有内部页号，如 `(1, 2, 3, 7)`（一般不用） |
+| `nac.PATHS` | 路径到内部页号的映射，如 `{"/": 1, "/about": 2}`（一般不用） |
 | `nac.IMAGES` | 图片表，如 `{"img/plan.png": (1, 640, 360)}`（id, 宽, 高） |
 
 ### B. 文本与转义
@@ -77,14 +78,16 @@ nac.done()
 |---|---|
 | `nac.link_path(path, text)` | 跳到路径；目录要带尾斜杠（如 `/notes/`） |
 | `nac.link(page, text)` | 按内部页号跳转；页号不存在时整行不显示 |
-| `nac.redirect(page)` | 立刻跳转，本页已拼的内容丢弃 |
+| `nac.redirect_path(path)` | 按路径立刻跳转；路径不存在时不动 |
+| `nac.redirect(page)` | 按内部页号跳转，本页已拼的内容丢弃 |
 | `nac.first_page()` | 本代最小内部页号（一般用 `link_path("/")`） |
 
 ### G. 表单
 
 | 调用 | 说明 |
 |---|---|
-| `nac.form(page)` | 声明接下来的字段提交给第几页 |
+| `nac.form_path(path)` | 声明表单提交到某个路径 |
+| `nac.form(page)` | 声明表单提交给内部页号 |
 | `nac.field(name, label="", secret=False)` | 单行输入 |
 | `nac.password(name, label="")` | 密码输入（`field(..., secret=True)` 的简写） |
 | `nac.button(label)` | 提交按钮 |
