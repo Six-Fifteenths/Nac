@@ -82,7 +82,7 @@ Windows 上运行同一个客户端，但加 `--plaintext` 指向隧道：
 .\NacViewer.exe --plaintext --addr 127.0.0.1:17001
 ```
 
-地址栏会显示 `console.nac.local/`；直接输入路径即可：
+地址栏会显示 `nac.local/`（如果用多站点 `nac.routes`，则是 `console.nac.local/`）；直接输入路径即可：
 
 | 路径 | 页面 |
 |---|---|
