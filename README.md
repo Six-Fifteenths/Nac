@@ -77,6 +77,11 @@
 
 前提：Rust 工具链（1.80+）、Python 3.9+。
 
+```bash
+git clone git@github.com:Six-Fifteenths/Nac.git
+cd Nac
+```
+
 **Windows（PowerShell）**
 
 ```powershell
@@ -98,6 +103,9 @@ cp nac.routes.example nac.routes
 ```
 
 窗口里应该看到一页《白塔》，地址栏是 `/1`。点链接翻页，`Esc` 返回。
+
+> `viewer` 需要图形环境。只有命令行（比如刚装好的 VPS）时用 `probe` 验证，
+> 或者在本机跑 `viewer` 通过 `nac.routes` 指向服务器。
 
 不想开窗口、只想确认线路是否通：
 
