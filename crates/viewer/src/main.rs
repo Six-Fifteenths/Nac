@@ -73,11 +73,10 @@ fn main() -> eframe::Result<()> {
         return Ok(());
     }
 
-    let routes = build_routes(routes_path.as_deref(), addr);
+    let (routes, from_embedded) = build_routes(routes_path.as_deref(), addr);
     if list_sites {
-        let embedded = routes::is_embedded();
         for site in &routes.sites {
-            if embedded {
+            if from_embedded {
                 println!("{}{}", if site.default { "*" } else { " " }, site.name);
             } else {
                 println!(
@@ -122,22 +121,34 @@ fn main() -> eframe::Result<()> {
     )
 }
 
-/// An explicit `--addr` wins (operator escape hatch); then an endpoint embedded
-/// at build time via `NAC_EMBED_ROUTES`; otherwise the shipped directory decides.
-fn build_routes(explicit: Option<&str>, addr: Option<String>) -> routes::Routes {
+/// Resolution order: `--addr`, then an explicit `--routes <path>`, then an
+/// endpoint embedded at build time via `NAC_EMBED_ROUTES`, then whatever
+/// directory the usual lookup finds. The explicit flag has to win over the
+/// embedded copy, otherwise a standalone build silently ignores it.
+///
+/// The second value says whether the result came from the embedded copy, which
+/// is what decides if endpoints are printed: a standalone build should not
+/// print them, but an operator who passed `--routes` asked for the file.
+fn build_routes(explicit: Option<&str>, addr: Option<String>) -> (routes::Routes, bool) {
     if let Some(fallback) = addr {
-        return routes::Routes::single("dev", &fallback);
+        return (routes::Routes::single("dev", &fallback), false);
+    }
+    if let Some(path) = explicit {
+        match routes::Routes::load(std::path::Path::new(path)) {
+            Some(routes) => return (routes, false),
+            None => eprintln!("无法读取站点目录 {path}"),
+        }
     }
     if let Some(routes) = routes::Routes::embedded() {
-        return routes;
+        return (routes, true);
     }
-    if let Some(path) = routes::Routes::locate(explicit) {
+    if let Some(path) = routes::Routes::locate(None) {
         if let Some(routes) = routes::Routes::load(&path) {
-            return routes;
+            return (routes, false);
         }
         eprintln!("无法读取站点目录 {}", path.display());
     }
-    routes::Routes::default()
+    (routes::Routes::default(), false)
 }
 
 fn selftest_run(routes: &routes::Routes, site_name: &str) -> eframe::Result<()> {

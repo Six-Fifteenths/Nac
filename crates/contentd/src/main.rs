@@ -90,6 +90,33 @@ impl State {
     }
 }
 
+fn proc_status() -> String {
+    #[cfg(target_os = "linux")]
+    {
+        std::fs::read_to_string("/proc/self/status").unwrap_or_default()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        String::new()
+    }
+}
+
+/// Reads the real UID out of `/proc/self/status`.
+///
+/// Returns `None` when the text is not a status file at all, which is the case
+/// on every platform without `/proc` — there the check does not apply and the
+/// caller lets it through.
+fn root_from_status(status: &str) -> Option<bool> {
+    let uid = status
+        .lines()
+        .find_map(|line| line.strip_prefix("Uid:"))?
+        .split_whitespace()
+        .next()?
+        .parse::<u32>()
+        .ok()?;
+    Some(uid == 0)
+}
+
 fn main() {
     let mut data = PathBuf::from("data");
     let mut port: u16 = 7000;
@@ -97,6 +124,7 @@ fn main() {
     let mut env: Vec<(String, String)> = Vec::new();
     let mut log: Option<PathBuf> = None;
     let mut session_ttl = Duration::from_secs(7 * 24 * 3600);
+    let mut allow_root = false;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
@@ -108,6 +136,7 @@ fn main() {
                     .unwrap_or_else(|| "127.0.0.1".to_string())
             }
             "--log" => log = args.next().map(PathBuf::from),
+            "--allow-root" => allow_root = true,
             "--session-ttl-hours" => {
                 let hours = args.next().and_then(|v| v.parse::<u64>().ok()).unwrap_or(168);
                 session_ttl = Duration::from_secs(hours.saturating_mul(3600));
@@ -123,6 +152,17 @@ fn main() {
                 eprintln!("unknown argument: {other}");
                 std::process::exit(2);
             }
+        }
+    }
+
+    // Page scripts run with this process's privileges, so starting as root would
+    // turn any page bug into a root compromise. Refuse rather than warn: a unit
+    // file with `User=` missing is exactly the mistake worth catching.
+    if !allow_root {
+        if let Some(true) = root_from_status(&proc_status()) {
+            eprintln!("拒绝以 root 运行：页面脚本会继承 root 权限。请用普通用户启动，");
+            eprintln!("或确实需要时加 --allow-root（不推荐）。");
+            std::process::exit(3);
         }
     }
 
@@ -616,4 +656,29 @@ fn read_capped<R: Read>(mut r: R, limit: usize) -> (Vec<u8>, bool) {
         }
     }
     (out, truncated)
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::root_from_status;
+
+    #[test]
+    fn detects_root_from_proc_status() {
+        let root = "Name:\tcontentd\nUid:\t0\t0\t0\t0\nGid:\t0\t0\t0\t0\n";
+        assert_eq!(root_from_status(root), Some(true));
+    }
+
+    #[test]
+    fn detects_a_normal_user() {
+        let user = "Name:\tcontentd\nUid:\t998\t998\t998\t998\nGid:\t998\t998\t998\t998\n";
+        assert_eq!(root_from_status(user), Some(false));
+    }
+
+    #[test]
+    fn no_proc_status_means_the_check_does_not_apply() {
+        assert_eq!(root_from_status(""), None);
+        assert_eq!(root_from_status("Name:\tcontentd\n"), None);
+        assert_eq!(root_from_status("Uid:\tnot-a-number\n"), None);
+    }
 }

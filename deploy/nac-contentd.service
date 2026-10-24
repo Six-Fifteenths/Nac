@@ -16,12 +16,28 @@ ExecStart=/srv/nac/bin/contentd \
     --session-ttl-hours 168
 Restart=always
 RestartSec=2
-
-# 页面脚本是 Python，会写 data/ 与 appdata/；其余路径只读。
+# --- 沙箱：页面脚本是本服务启动的，这一节决定"页面代码能不能拿到更多权限" ---
+# 这里的指令都在 systemd 232+ 可用（CentOS 8 / Debian 10 / Ubuntu 20.04 起）。
 NoNewPrivileges=yes
-ProtectSystem=full
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictNamespaces=yes
+# 整个文件系统只读，只有下面几处可写；页面脚本改不动 bin/ 与 site/。
+ProtectSystem=strict
+ReadWritePaths=/srv/nac/data /srv/nac/admin/data -/srv/nac/archive
 ProtectHome=yes
 PrivateTmp=yes
-
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+# 会话文件默认只有属主可读。
+UMask=0077
+# 更严的几条需要较新 systemd（242 / 245 / 247），确认版本后再放开：
+# ProtectHostname=yes
+# ProtectClock=yes
+# ProtectProc=invisible
 [Install]
 WantedBy=multi-user.target

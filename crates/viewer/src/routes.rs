@@ -18,10 +18,6 @@ pub const DEFAULT_PORT: &str = "7000";
 
 include!(concat!(env!("OUT_DIR"), "/embedded.rs"));
 
-pub fn is_embedded() -> bool {
-    has_embedded()
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Site {
     pub name: String,
@@ -80,6 +76,9 @@ impl Routes {
     }
 
     pub fn embedded() -> Option<Self> {
+        if !has_embedded() {
+            return None;
+        }
         let text = embedded_text()?;
         let routes = Self::parse(&text);
         if routes.is_empty() {

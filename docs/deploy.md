@@ -137,6 +137,41 @@ console MTI3LjAuMC4xOjcwMDE=
 
 ## 5. 上线清单
 
+### 5.0 运行身份（最重要的一条）
+
+页面脚本由 `contentd` 启动，**继承它的权限**。用 root 跑，等于任何页面里的一个 bug
+都直接拥有 root。因此：
+
+- `contentd` 检测到真实 UID 是 0 时**直接退出**（退出码 3），不再只是警告；
+  确实需要时才加 `--allow-root`。
+- 两个 unit 都写了 `User=nac`，安装后这样确认：
+
+  ```bash
+  systemctl show -p User --value nac-contentd   # 应为 nac
+  ps -o user= -C contentd                        # 应为 nac
+  ```
+
+- `nac` 用户是 `nologin`、无 sudo、无 SSH key。这是"页面代码拿不到 root"的第一层。
+
+第二层是 unit 里的沙箱（两家共用）：
+
+| 指令 | 作用 |
+|---|---|
+| `NoNewPrivileges=yes` | 禁止任何 setuid 提权 |
+| `CapabilityBoundingSet=` / `AmbientCapabilities=` | 丢掉全部 capability |
+| `RestrictSUIDSGID=yes` | 不能创建 setuid/setgid 文件 |
+| `RestrictNamespaces=yes` / `LockPersonality=yes` | 关掉常见逃逸面 |
+| `ProtectSystem=strict` + `ReadWritePaths=…` | 整个文件系统只读，只有 data 目录可写 → 页面脚本改不动 `bin/`、`site/`、`/etc` |
+| `ProtectHome=yes` / `PrivateTmp=yes` / `PrivateDevices=yes` | 看不到家目录，私有 `/tmp`，无设备节点 |
+| `ProtectKernelTunables/Modules/ControlGroups=yes` | 内核与 cgroup 不可写 |
+| `UMask=0077` | 会话文件只有属主可读 |
+
+这些指令都需要 systemd 232+（CentOS 8 / Debian 10 / Ubuntu 20.04 起）。更老的系统上 unit
+会加载失败，`install.sh` 会检测版本并提示。`ProtectHostname` / `ProtectClock` /
+`ProtectProc` 需要更新的 systemd，已作为注释留在文件里，确认版本后可放开。
+
+### 5.1 逐项检查
+
 服务器上：
 
 1. `systemctl is-active nac-contentd nac-console` → 两个 `active`
