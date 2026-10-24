@@ -1,3 +1,5 @@
+> 2026-10-24 更新：协议已加 `HELLO` 版本握手；公开站可在帧层下加 TLS。本文保留早期设计记录，最新格式以 docs/protocol.md 为准。
+
 # 实现规格
 
 配套：[PROTOCOL-DECISIONS.md](./PROTOCOL-DECISIONS.md)

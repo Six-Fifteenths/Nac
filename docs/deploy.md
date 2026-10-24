@@ -35,12 +35,14 @@ sudo ./deploy/install.sh
 `install.sh` 做的事（幂等，可以反复跑）：
 
 1. 建 `nac-share` 组与 `nac-public` / `nac-console` 两个 `nologin` 用户（公开数据组共享）
-2. 装 `contentd`、`publish` 到 `/srv/nac/bin`
-3. 同步 `site/` → `/srv/nac/site`、`admin/site/` → `/srv/nac/admin/site`（`--keep-site` 时保留现有）
-4. 以各自用户发布两套站点（公开站 `--archive`）
-5. 把 `deploy/*.service` 里的 `/srv/nac` 替换成 `--dest` 指定目录后装进 `/etc/systemd/system`
-6. `systemctl enable` + `restart nac-contentd nac-console`
-7. 自检：`is-active`、`ss -ltnp`、用一个裸帧向 7000 取一次 manifest
+2. 装 `contentd`、`publish`、`probe` 到 `/srv/nac/bin`
+3. 生成自签 TLS 证书与 pin：`/etc/ssl/nac/public.{crt,key,pin}`
+4. 同步 `site/` → `/srv/nac/site`、`admin/site/` → `/srv/nac/admin/site`（`--keep-site` 时保留现有）
+5. 以各自用户发布两套站点（公开站 `--archive`）
+6. 把 `deploy/*.service` 里的 `/srv/nac` 替换成 `--dest` 指定目录后装进 `/etc/systemd/system`
+7. 安装健康检查/每日备份 unit 与 timer
+8. `systemctl enable` + `restart` 服务，启动 timer
+9. 自检：`is-active`、`ss -ltnp`、`probe --tls-pin-file ... health`
 
 参数：
 
@@ -66,18 +68,23 @@ sudo ./deploy/install.sh
 
 | unit | 端口 | 绑定 | 用途 |
 |---|---|---|---|
-| `nac-contentd.service` | 7000 | `127.0.0.1` | 公开站点，带 `--log data/access.jsonl` 与 `--session-ttl-hours 168` |
-| `nac-console.service` | 7001 | `127.0.0.1` | 运营台，额外传 `NAC_ROOT`、`NAC_LOG` |
+| `nac-contentd.service` | 7000 | `127.0.0.1`（`--bind-public` 时 `0.0.0.0`）| 公开站点，TLS + `--log data/access.jsonl` |
+| `nac-console.service` | 7001 | `127.0.0.1` | 运营台，回环明文，额外传 `NAC_ROOT`、`NAC_LOG` |
 
 两个 unit 都带 `Restart=always`、`NoNewPrivileges=yes`、`ProtectSystem=strict`、
 `ProtectHome=yes`、`PrivateTmp=yes`、`ProtectProc=invisible`、`ProcSubset=pid`、
 `SystemCallFilter=~@debug`。
 
-**默认只绑回环，所以装完外人是连不上的。** 这是"不把 IP 交出去"的当前状态：
+**默认只绑回环；`--bind-public` 后公开站在 7000 提供 TLS。**
+TLS 保护内容与表单，但直连仍然暴露服务器 IP；要隐藏 IP 需要在前面加 TCP 中继或 Tor。
 
-- 想让普通用户访问 → 必须先定传输层（Tor / 自建中继），**当前未实现**；
-- 临时直连演示 → `sudo ./deploy/install.sh --bind-public`，再在防火墙放行 7000。
-  这时任何抓到连接的人都知道服务器 IP，`nac.routes` 的遮掩也失效。
+### TLS（公开站）
+
+- 证书：`/etc/ssl/nac/public.crt`、`/etc/ssl/nac/public.key`（`nac-public` 600）、pin：`public.pin`
+- `nac-contentd` 带 `--tls-cert/--tls-key`；运营台不传，保持回环明文
+- 客户端用 pin 固定证书；**重新生成证书后必须重编客户端**
+- `probe` 测试公开站要带 `--tls-pin-file /etc/ssl/nac/public.pin`；运营台不带
+- 自签证书只保护传输内容，不隐藏服务器 IP；隐藏 IP 用 L4 中继或 Tor
 
 改完 unit 记得：
 
@@ -192,7 +199,7 @@ console MTI3LjAuMC4xOjcwMDE=
 2. `ss -ltnp | grep 700` → 只有 `127.0.0.1:7000`、`127.0.0.1:7001`（用了 `--bind-public` 才有 `0.0.0.0:7000`）
 3. `journalctl -u nac-contentd -n 20` → 没有反复重启、没有 `bind` 失败
 4. `cd /srv/nac && bin/publish --site site --data data` → `published <代> (N pages, M images)`
-   （注意：以 `nac` 身份跑，`sudo -u nac ...`，否则产物属主会变成 root）
+   （注意：以 `nac-public` 身份跑，`sudo -u nac-public ...`；运营台发布用 `nac-console`）
 5. `tail -f /srv/nac/data/access.jsonl` → 取一次页，应出现一行 JSON
 6. firewall：只留 SSH。传输层未定之前不开 7000
 
@@ -209,7 +216,7 @@ console MTI3LjAuMC4xOjcwMDE=
 
 | 想做的事 | 做法 |
 |---|---|
-| 改内容 | 改 `site/*.py` → `sudo -u nac /srv/nac/bin/publish --site /srv/nac/site --data /srv/nac/data` |
+| 改内容 | 改 `site/*.py` → `sudo -u nac-public /srv/nac/bin/publish --site /srv/nac/site --data /srv/nac/data` |
 | 改完立刻生效吗 | 是。`contentd` 每次请求都重读 `data/current`，不用重启 |
 | 回滚 | 把 `data/current` 里的代名改成旧代（`data/gen/` 保留最近 5 代） |
 | 改运营台 | 改 `admin/site/*.py` → `publish --site admin/site --data admin/data` |
@@ -239,11 +246,14 @@ console MTI3LjAuMC4xOjcwMDE=
 
 **代目录**：`publish` 自动保留最近 5 代，更早的自动删除。
 
-**备份**（只需这四样，其余可再生）：
+**健康检查**：`nac-health.timer` 每 5 分钟跑 `probe health`；失败看
+`journalctl -u nac-health.service`。
+
+**自动备份**：`nac-backup.timer` 每日 04:45 备份 `site`、`admin/site`、`data/appdata`、
+`archive` 到 `/root/backups/nac/`，保留 7 份；也可手工：
 
 ```bash
-tar czf nac-$(date +%F).tgz \
-    -C /srv/nac site admin/site data/appdata archive
+/usr/local/sbin/nac-backup
 ```
 
 ---
@@ -270,7 +280,7 @@ sudo ./deploy/install.sh        # 会重新装二进制、同步源码、重新�
 | 发布报"页号被用了两次" | `data` 或 `archive` 目录落在 `site` 里面 |
 | 发布报 `SyntaxError` | 就是那一页的 Python 语法错，按提示的行号改 |
 | 图片不显示 | `nac.img()` 路径要和 `site/` 下一致；`journalctl` 里会有 `KeyError` |
-| 运营台打不开 | 隧道是否建好；`nac.routes` 里有没有 `console`；7001 是否 active |
+| 运营台打不开 | 隧道是否建好；客户端是否加了 `--plaintext --addr 127.0.0.1:17001`；7001 是否 active |
 | 日志不增长 | `contentd` 启动时有没有给 `--log`；unit 里路径是否可写（属主 `nac-public`） |
 | 会话文件暴涨 | 检查 `--session-ttl-hours`；每个新客户端一个文件，属正常 |
 
@@ -278,7 +288,7 @@ sudo ./deploy/install.sh        # 会重新装二进制、同步源码、重新�
 
 ```bash
 cd /srv/nac/data/gen/$(cat /srv/nac/data/current)/scripts
-sudo -u nac NAC_DATA_DIR=/tmp/nacprobe NAC_SESSION_FILE=/tmp/nacprobe.json \
+sudo -u nac-public NAC_DATA_DIR=/tmp/nacprobe NAC_SESSION_FILE=/tmp/nacprobe.json \
     NAC_INPUT='{"page":7,"fields":{}}' python3 -B 7.py
 ```
 
