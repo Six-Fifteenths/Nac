@@ -5,6 +5,7 @@
 //! The worker below owns the protocol client so the session stays consistent
 //! between page requests and form submissions.
 
+use std::collections::HashMap;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::thread;
 
@@ -36,13 +37,42 @@ impl Fetcher {
 
         thread::spawn(move || {
             let mut client = Client::new(addr);
+            let mut entries: HashMap<u16, Entry> = HashMap::new();
+            let mut static_cache: HashMap<u16, (u64, String)> = HashMap::new();
             while let Ok(job) = job_rx.recv() {
                 let msg = match job {
-                    Job::Manifest => Msg::Manifest(client.manifest().ok()),
-                    Job::Page(id) => Msg::Page {
-                        id,
-                        text: client.page(id).ok(),
-                    },
+                    Job::Manifest => {
+                        let manifest = client.manifest().ok();
+                        if let Some(list) = &manifest {
+                            entries.clear();
+                            for entry in list {
+                                entries.insert(entry.id, entry.clone());
+                            }
+                        }
+                        Msg::Manifest(manifest)
+                    }
+                    Job::Page(id) => {
+                        if let Some(entry) = entries.get(&id) {
+                            if !entry.dynamic {
+                                if let Some((hash, text)) = static_cache.get(&id) {
+                                    if *hash == entry.hash {
+                                        let _ = msg_tx.send(Msg::Page {
+                                            id,
+                                            text: Some(text.clone()),
+                                        });
+                                        continue;
+                                    }
+                                }
+                            }
+                        }
+                        let text = client.page(id).ok();
+                        if let (Some(entry), Some(text)) = (entries.get(&id), &text) {
+                            if !entry.dynamic {
+                                static_cache.insert(id, (entry.hash, text.clone()));
+                            }
+                        }
+                        Msg::Page { id, text }
+                    }
                     Job::Submit(id, fields) => match client.submit(id, fields) {
                         Ok((id, text)) => Msg::Page {
                             id,
