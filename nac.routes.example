@@ -1,9 +1,12 @@
 # nac 站点目录（示例）
 #
-# 复制成 nac.routes 再改。nac.routes 不进仓库，真正的端点只写在那里。
-# 用户只看到显示域名和路径，看不到也输不进主机地址。
+# 复制成 nac.routes 再改。真正的端点只写在这里。
+# 用户只看到名字和路径，看不到也输不进主机地址。
 #
 # 格式：[*]名字<空白>端点[<空白>标记...]
+#   名字    就是地址栏里那一整串，例如 nac.local、iris.out、EX_MYTH。
+#           没有共用后缀，也不分层级 —— 客户端拿它原样查表。
+#           可以是域名，也可以是带下划线的怪名字，都由你定。
 #   端点    用 `viewer --routes-encode 主机:端口` 生成（base64，只是不显眼，不是加密）
 #   标记（顺序随意，都可省略）：
 #     tls              强制 TLS（构建时必须带证书 pin）
@@ -11,23 +14,20 @@
 #     ssh=用户@服务器   只有 admin 构建才生效：客户端自己拉起 ssh -N -L 隧道
 #   带 * 的是默认站点，打开客户端就落在它上面。
 #
-# 另外可以写一行改掉显示用的后缀（默认 nac.local）：
-#   @domain shop.example
-# 它只影响显示和你输入的内容，不参与任何真实解析。
+# 只列一个站也能用；表里没有的名字会去问当前连着的服务器（见 docs/admin-guide.md）。
 #
 # 检查：  viewer --routes-check    （会列出 auto/tls/plain 与 ssh 标记）
 #
 # 注意：这不是加密。客户端要直连服务器就必须知道服务器在哪里，
-# 所以本文件只是让端点不显眼而已。真正的"看不到我的 IP"属于传输层，
-# 要等 Tor / 中继方案落地。
+# 所以本文件只是让端点不显眼而已。
 
-# @domain shop.example
-
-*home   MTI3LjAuMC4xOjcwMDA=   plain
+*nac.local   MTI3LjAuMC4xOjcwMDA=   plain
+# iris.out    MTI3LjAuMC4xOjcwMDI=   plain
+# EX_MYTH     MTI3LjAuMC4xOjcwMDM=   plain
 
 # 运营台：服务器上只监听 127.0.0.1:7001。
 # admin 构建会自动开隧道；分发版不含 ssh 代码，这一行对它只是个名字。
-console MTI3LjAuMC4xOjcwMDE=   plain ssh=root@example.test
+console      MTI3LjAuMC4xOjcwMDE=   plain ssh=root@example.test
 
 # 公网站点（服务器开了 TLS 时）：
-# *home   MTk5LjcuMTQwLjIxNzo3MDAw   tls
+# *nac.local  MTk5LjcuMTQwLjIxNzo3MDAw   tls

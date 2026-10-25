@@ -50,7 +50,11 @@ HOST=$(printf '%s' "$HOST" | tr -d '[:space:]')
 BIND=$(printf '%s' "$BIND" | tr -d '[:space:]')
 
 case "$NAME" in
-    *[!a-z0-9-]*|'') echo "站点名只能用小写字母、数字和连字符：$NAME" >&2; exit 2 ;;
+    *[!A-Za-z0-9._-]*|'')
+        echo "站点名只能用字母、数字、点、连字符和下划线：$NAME" >&2
+        echo "（名字就是地址栏里那一整串，比如 nac.local / iris.out / EX_MYTH）" >&2
+        exit 2
+        ;;
 esac
 
 [ "$(id -u)" = 0 ] || { echo "需要 root" >&2; exit 1; }
