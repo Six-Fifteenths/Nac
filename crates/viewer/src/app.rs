@@ -343,7 +343,13 @@ impl eframe::App for Viewer {
         let failed = self.tab().failed;
         let error = self.tab().error.clone();
         let uid = self.tab().uid;
+        let theme_bg = self.tab().theme.bg;
         egui::CentralPanel::default().show(ui, |ui| {
+            // 整页底色：先铺一层，正文画在上面。页面不写 `[[theme]]` 时画的
+            // 还是面板自己的颜色，所以老页面一个字都不用改。
+            if let Some(bg) = theme_bg {
+                ui.painter().rect_filled(ui.max_rect(), 0.0, bg);
+            }
             // Salted by tab: without it every tab would share one scroll offset,
             // so switching tabs would land you mid-page somewhere else.
             let mut area = egui::ScrollArea::vertical()

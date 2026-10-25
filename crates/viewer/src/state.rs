@@ -42,6 +42,8 @@ pub(crate) struct Tab {
     pub(crate) saved_fields: HashMap<u16, HashMap<String, String>>,
     /// `[[sheet]]` rules, gathered before the first box is drawn.
     pub(crate) sheet: HashMap<String, Style>,
+    /// 整页主题（`[[theme …]]`）：底色与默认字色。没写就是全 `None`。
+    pub(crate) theme: Style,
     pub(crate) shown_path: Option<String>,
     /// When the current page's `[[scene]]` timelines started. Reset on every
     /// page load, so a reload replays the animation instead of resuming it.

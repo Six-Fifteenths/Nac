@@ -141,7 +141,15 @@ impl Tab {
         let blocks = self.blocks.clone();
         self.sheet.clear();
         collect_sheet(&blocks, &mut self.sheet);
-        self.render_list(ui, blocks, Text::default());
+        // 主题先落到这一页的底子上：字色是默认值，盒子仍然可以自己再改。
+        let mut base = Text::default();
+        if let Some(color) = self.theme.color {
+            base.color = color;
+        }
+        if let Some(link) = self.theme.link {
+            base.link = link;
+        }
+        self.render_list(ui, blocks, base);
     }
 
     pub(crate) fn render_list(&mut self, ui: &mut egui::Ui, blocks: Vec<Block>, text: Text) {
@@ -292,6 +300,7 @@ impl Tab {
                     self.render_box(ui, &style, children, text);
                 }
                 Block::Sheet(_) => {}
+                Block::Theme(_) => {}
                 Block::Term(term) => {
                     if term.target.is_some() {
                         saw_input = true;
@@ -468,6 +477,44 @@ pub(crate) fn first_file(blocks: &[Block]) -> Option<(u16, String)> {
             Block::Tabs { bodies, .. } => {
                 for body in bodies {
                     if let Some(found) = first_file(body) {
+                        return Some(found);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// 整页主题：`[[theme …]]` 写在哪一层都算数，最外层的第一个说了算。
+///
+/// 页面常常把整个正文包在 `[[box class=page]]` 里，所以这里要往里找 —— 和
+/// `first_heading` 同一个道理。
+pub(crate) fn collect_theme(blocks: &[Block]) -> Option<Style> {
+    for block in blocks {
+        match block {
+            Block::Theme(style) => return Some(style.clone()),
+            Block::Box { children, .. } => {
+                if let Some(found) = collect_theme(children) {
+                    return Some(found);
+                }
+            }
+            Block::Columns(parts) => {
+                for part in parts {
+                    if let Some(found) = collect_theme(part) {
+                        return Some(found);
+                    }
+                }
+            }
+            Block::Note { body, .. } | Block::Details { body, .. } => {
+                if let Some(found) = collect_theme(body) {
+                    return Some(found);
+                }
+            }
+            Block::Tabs { bodies, .. } => {
+                for body in bodies {
+                    if let Some(found) = collect_theme(body) {
                         return Some(found);
                     }
                 }

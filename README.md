@@ -48,20 +48,20 @@ cp nac.routes.example nac.routes                        # 填上服务器地址
 
 检查这份表读得对不对：`./target/release/viewer --routes-check`。
 
-## 3. 线上现在有六个站
+## 3. 五个站，一份代码
 
-同一个代码库，六份页面、六个进程、六份数据，互不可见：
+同一个代码库，五份页面，各跑各的进程、各用各的数据，互不可见。
+（线上此刻跑着前四个；`cain.society` 还没部署。）
 
 | 名字 | 页面 | 是什么 |
 |---|---|---|
 | `nac.local` | `site/` | 主站：汉诺塔动画、Hacker News 复刻、留言板、全套排版示例 |
-| `shop.nac.local` | `site-shop/` | 小器物：购物车、下单、订单、扣库存（SQLite） |
 | `iris.out` | `site-iris/` | 一份清单：看过听过的东西，带分数与统计 |
-| `EX_MYTH` | `site-myth/` | 八条神话，条目互相指路；名字里的下划线在真域名系统里是非法的 |
 | `web.shell` | `site-web.shell/` | 终端样式的站：命令、密码门、彩蛋（照 WebShell 复刻） |
 | `conduit.sh` | `site-conduit/` | 一个真的多页面应用：注册、发文、评论、标签、收藏、关注、分页（RealWorld 规格） |
+| `cain.society` | `site-cain.society/` | 照手写 HTML 复刻的《The Society of Cain》：暗底羊皮卷、红印、黑底绿字终端 |
 
-加第七个站不用改客户端：
+加第六个站不用改客户端：
 
 ```bash
 ./deploy/add-site.sh 新名字 --site 页面目录 --port 7005 --host 服务器IP
@@ -98,9 +98,9 @@ cp nac.routes.example nac.routes                        # 填上服务器地址
 | `crates/viewer` | 客户端：原生窗口、标签页、路由表、TLS |
 | `crates/tls-client` | 自签证书 + 指纹固定的 TLS 客户端 |
 | `crates/probe` | 命令行探针：部署自检与排障 |
-| `site/`、`site-shop/`、`site-iris/`、`site-myth/` | 四个站的页面源码 |
+| `site/`、`site-conduit/`、`site-iris/`、`site-web.shell/`、`site-cain.society/` | 五个站的页面源码 |
 | `admin/site/` | 运营台页面（不进公开站） |
-| `deploy/` | 安装脚本、加站脚本、systemd unit、备份脚本 |
+| `deploy/` | 安装脚本、加站脚本、systemd unit、备份脚本、圣印那张图的生成脚本 |
 
 ## 6. 构建变体
 

@@ -83,11 +83,17 @@ def _dynamic(what):
 
 # --------------------------------------------------------------- B. 文本与转义
 
+#: 会被当成标记的字符：行首的块标记（`>` 引用、`#` 标题、`-` `+` 列表）和行内的
+#: 格式标记。`esc()` 把换行压成空格，所以整段只有开头能触发块标记 —— 但这里不区分，
+#: 一律转义：反过来的代价是少显示一个 `-`，那更糟。
+_ESCAPE = "\\*_`[]>#-+"
+
+
 def esc(text):
     """把任意文本变成不会被当成标记的文面。"""
     out = []
     for ch in str(text):
-        if ch in "\\*_`[]":
+        if ch in _ESCAPE:
             out.append("\\" + ch)
         elif ch == "\n":
             out.append(" ")
@@ -541,7 +547,7 @@ def _attrs(attrs):
 def sheet(text):
     """整页的样式表，一行一条规则。
 
-        nac.sheet(".card { bg: #fff; border: 1px:#ddd; radius: 4; pad: 16; }")
+        nac.sheet(".card { bg: #fff; border: 1px:#ddd; radius: 4; }")
 
     选择器只能是 `.类名`；同名规则后者覆盖前者。多行的话用三引号字符串，
     每行一条，写成 CSS 的样子即可。
@@ -552,6 +558,17 @@ def sheet(text):
         if line:
             _buf.append(line)
     _buf.append("[[end]]")
+
+
+def theme(**attrs):
+    """整页的底色与默认字色。
+
+        nac.theme(bg="#0d0d0d", color="#e8e0d0", link="#8ab4f8")
+
+    只认颜色（`bg` `color` `link`）：它铺在内容区最底下，管不了任何布局，
+    也管不到标签栏和地址栏 —— 那些是窗口的，不是页面的。
+    """
+    _buf.append("[[theme %s]]" % _attrs(attrs))
 
 
 @contextmanager
@@ -1007,7 +1024,7 @@ links = _Group(
 skin = _Group(
     "skin",
     box=box, cols=cols, col=col, note=note, details=details, tabs=tabs, tab=tab,
-    sheet=sheet,
+    sheet=sheet, theme=theme,
 )
 
 media = _Group(

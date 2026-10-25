@@ -232,6 +232,9 @@ pub enum Block {
     /// `[[sheet]] .name { bg: #fff; } [[end]]` — class name → style. Collected
     /// before rendering, never drawn itself.
     Sheet(Vec<(String, Style)>),
+    /// `[[theme bg=#0d0d0d color=#e8e0d0]]` — 整页的底色与默认字色。画在正文
+    /// 底下，和 `[[sheet]]` 一样先扫一遍；它不带任何布局，只是颜色。
+    Theme(Style),
     /// `[[box class=card pad=16 bg=#fff]] … [[end]]` — the layout primitive.
     Box {
         style: Style,
@@ -451,6 +454,12 @@ fn parse_one(lines: &[&str], i: &mut usize) -> Option<Block> {
     if head == "[[sheet]]" {
         *i += 1;
         return Some(Block::Sheet(parse_sheet(lines, i)));
+    }
+
+    if let Some(rest) = t.strip_prefix("[[theme") {
+        // 整页的颜色。它在正文里，但画在正文底下 —— 客户端先扫一遍再动笔。
+        *i += 1;
+        return Some(Block::Theme(Style::from_attrs(inner_spec(rest))));
     }
 
     if let Some(rest) = t.strip_prefix("[[box") {

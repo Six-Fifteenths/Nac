@@ -7,6 +7,35 @@
     }
 
     #[test]
+    fn a_theme_line_is_collected_not_drawn() {
+        let blocks = parse("[[theme bg=#0d0d0d color=#e8dfc8 link=#8a0303]]\n正文\n");
+        match only(&blocks) {
+            Block::Theme(style) => {
+                assert_eq!(
+                    style.bg,
+                    Some(crate::egui::Color32::from_rgb(0x0d, 0x0d, 0x0d))
+                );
+                assert!(style.color.is_some());
+                assert!(style.link.is_some());
+            }
+            other => panic!("期望主题行，得到 {other:?}"),
+        }
+        // 页面常把正文整个包在盒子里，里面的主题也得算数。
+        let nested = parse("[[box]]\n[[theme bg=#000000]]\n[[end]]\n");
+        assert!(crate::render::collect_theme(&nested).is_some());
+    }
+
+    #[test]
+    fn an_escaped_angle_bracket_stays_a_paragraph() {
+        // `esc()` 会把 `>` 转义，否则终端里的 `>>>` 会被当成引用。
+        let blocks = parse("\\>\\>\\> [SYSTEM] 你好\n");
+        match only(&blocks) {
+            Block::Para(parts) => assert_eq!(plain(parts), ">>> [SYSTEM] 你好"),
+            other => panic!("期望段落，得到 {other:?}"),
+        }
+    }
+
+    #[test]
     fn columns_split_evenly_or_at_markers() {
         // No markers: split into the requested number of columns.
         let auto = parse("[[cols 2]]\na\n\nb\n\nc\n\nd\n[[end]]\n");

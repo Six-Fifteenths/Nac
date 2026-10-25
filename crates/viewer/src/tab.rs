@@ -37,6 +37,7 @@ impl Tab {
             focus_input: false,
             saved_fields: HashMap::new(),
             sheet: HashMap::new(),
+            theme: Style::default(),
             shown_path: None,
             scene_clock: None,
             target,
@@ -365,6 +366,7 @@ impl Tab {
 
     pub(crate) fn apply(&mut self, id: u16, text: &str) {
         self.blocks = markup::parse(text);
+        self.theme = crate::render::collect_theme(&self.blocks).unwrap_or_default();
         // 上一页的附件进度不该跟着这一页走：id 是页内的，换了页就不作数了。
         self.saved.clear();
         // 窗口标题 = 正文里第一个标题。必须往嵌套里找 —— 页面常常把整个正文包在

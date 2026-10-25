@@ -212,7 +212,7 @@ AttributeError: nac.text 里没有 'nope'
 
 | 调用 | 说明 |
 |---|---|
-| `nac.esc(text)` | 转义用户输入，使其不会被当成标记 |
+| `nac.esc(text)` | 转义，使其不会被当成标记（含行首的 `>` `#` `-` `+`） |
 | `nac.b(text)` | 粗体 |
 | `nac.i(text)` | 斜体 |
 | `nac.tt(text)` | 等宽 |
@@ -245,13 +245,12 @@ nac.table(
 
 | 调用 | 说明 |
 |---|---|
-| `with nac.cols(n=2):` + `nac.col()` | 并排成 n 列（最多 4） |
+| `with nac.cols(n=2):` + `nac.col()` | 并排成 n 列，每列宽度平分 |
 | `with nac.note(kind, title):` | 提示框，`kind` 取 `info`/`ok`/`warn`/`danger` |
-| `with nac.tip(t)` / `ok` / `warn` / `danger` | 上面那个的简写 |
 | `with nac.details(summary):` | 可折叠区块，默认收起 |
 | `with nac.tabs(*titles):` + `nac.tab()` | 页签 |
 | `with nac.box(类名, **属性):` | 样式层的盒子，见第 11 节 |
-| `with nac.row(**属性):` | 横排的盒子 |
+| `nac.theme(bg=…, color=…, link=…)` | 整页底色与默认字色，见第 11 节 |
 | `nac.avatar(名字, 尺寸=40)` | 按名字生成的头像，见 11.5 |
 
 容器**可以互相嵌套**，深度不限：
@@ -769,6 +768,20 @@ nac.avatar("张三", 28)                # 见 11.4
 ```
 
 `class` 是 Python 关键字，所以类名用第一个位置参数传，或者写 `cls="card"`。
+
+### 11.1.1 整页底色：`nac.theme()`
+
+盒子管自己那一块。整页的底子是另一件事，用 `nac.theme()`：
+
+```python
+nac.theme(bg="#0d0d0d", color="#e8dfc8", link="#8a0303")
+```
+
+它只收三个颜色：`bg` 内容区底色、`color` 默认字色、`link` 默认链接色。
+写一次就够，客户端铺在正文底下 —— 所以一张浅色羊皮卷可以坐在近黑的夜里。
+
+它**只管颜色**：改不了标签栏和地址栏（那是窗口的），也改不了 860 的宽度和留白
+（那是版式）。
 
 ### 11.2 没有横排
 
