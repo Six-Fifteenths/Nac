@@ -94,13 +94,13 @@ def esc(text):
 
 
 def b(text):
-    """粗体。"""
-    return "*" + esc(text) + "*"
+    """粗体：`**这样**`。"""
+    return "**" + esc(text) + "**"
 
 
 def i(text):
-    """斜体。"""
-    return "_" + esc(text) + "_"
+    """斜体：`*这样*`。"""
+    return "*" + esc(text) + "*"
 
 
 def tt(text):
@@ -115,8 +115,21 @@ def join(*parts):
 
 # --------------------------------------------------------------- C. 块级排版
 
+def write(text):
+    """原样发一段 Markdown。
+
+    "只写 Python" 不等于"不能写字"：你可以用辅助函数一块块拼，
+    也可以把一整段 Markdown 直接交给客户端，两者混用没问题。
+    """
+    for line in str(text).strip("\n").splitlines():
+        _buf.append(line)
+
+
 def raw(line):
-    """原样写一行标记，兜底用。"""
+    """原样写一行标记。
+
+    内部用的口子：辅助函数不够用时直接写 `[[...]]` 指令。
+    正常写作不需要它 —— 普通文字用 md() 或 p()/h2()/bullets() 这些。"""
     _buf.append(str(line))
 
 
@@ -187,15 +200,14 @@ def hr():
 
 
 def code(text, lang=None):
-    """等宽块。给了 lang 会显示成代码块并标上语言名。"""
-    body = str(text).splitlines() or [""]
-    if lang:
-        _buf.append("[[code %s]]" % _cell(lang))
-        _buf.extend(body)
-        _buf.append("[[end]]")
-    else:
-        for line in body:
-            _buf.append("| " + line)
+    """代码块，发的是 Markdown 围栏（```）。
+
+    给了 lang 会标在右上角，也是围栏后面那个词。
+    """
+    body = str(text).rstrip("\n").splitlines() or [""]
+    _buf.append("```" + (str(lang) if lang else ""))
+    _buf.extend(body)
+    _buf.append("```")
 
 
 def gap():
@@ -538,7 +550,7 @@ def avatar(name, size=40):
 # 只有这些。没有宽度、没有位置、没有 hover —— 那些由客户端决定，
 # 页面说了不算（见 docs/authoring.md 第 11 节）。
 BOX_KEYS = {
-    "class", "bg", "color", "pad", "margin", "gap", "radius", "border", "dir",
+    "class", "bg", "color", "radius", "border",
     "ta", "size", "weight", "font", "mono", "italic", "link", "nowrap",
     "shadow", "opacity",
 }
@@ -597,23 +609,6 @@ def box(*positional, **attrs):
         yield
     finally:
         _buf.append("[[end]]")
-
-
-@contextmanager
-def row(*positional, **attrs):
-    """横排的盒子，子盒子用 grow= 分宽度。"""
-    attrs["dir"] = "row"
-    with box(*positional, **attrs):
-        yield
-
-
-@contextmanager
-def span(*positional, **attrs):
-    """行内盒子：不换行，宽度跟着内容。"""
-    attrs.setdefault("dir", "row")
-    attrs.setdefault("nowrap", True)
-    with box(*positional, **attrs):
-        yield
 
 
 def button(label):
@@ -1018,3 +1013,92 @@ def flush():
 
 
 atexit.register(flush)
+
+
+# ------------------------------------------------------------ 分类（命名空间）
+#
+# 函数还是那一批，一个都没少，`nac.p(...)` 照样能用。这里只是给它们分了组，
+# 让"这一页在干什么"一眼看得出来：
+#
+#     nac.text.p("正文")        nac.forms.field("title", "标题")
+#     nac.data.db()             nac.state.session_get("uid")
+#
+# 全表见 docs/authoring.md 第 2 节。
+
+
+class _Group:
+    """一组函数。只能看和调，不参与任何逻辑。"""
+
+    def __init__(self, name, **funcs):
+        self.__dict__.update(funcs)
+        self.__dict__["_name"] = name
+
+    def __getattr__(self, item):
+        raise AttributeError("nac.%s 里没有 %r" % (self._name, item))
+
+    def __repr__(self):
+        names = sorted(k for k in self.__dict__ if not k.startswith("_"))
+        return "<nac.%s: %s>" % (self._name, " ".join(names))
+
+
+text = _Group(
+    "text",
+    p=p, h1=h1, h2=h2, h3=h3, b=b, i=i, tt=tt, join=join, esc=esc,
+    code=code, quote=quote, bullets=bullets, ordered=ordered,
+    table=table, defs=defs, hr=hr, gap=gap, write=write, raw=raw,
+)
+
+links = _Group(
+    "links",
+    link=link, link_path=link_path, inline_path=inline_path,
+    inline_url=inline_url, nav=nav, home=home,
+    redirect=redirect, redirect_path=redirect_path, first_page=first_page,
+)
+
+skin = _Group(
+    "skin",
+    note=note, tip=tip, ok=ok, warn=warn, danger=danger,
+    details=details, tabs=tabs, tab=tab,
+    sheet=sheet, box=box, avatar=avatar,
+    img=img, cap=cap, figure=figure,
+)
+
+forms = _Group(
+    "forms",
+    form=form, form_path=form_path, field=field, password=password,
+    textarea=textarea, select=select, check=check, hidden=hidden,
+    prefill=prefill, button=button,
+)
+
+req = _Group(
+    "req",
+    request=request, path=path, path_arg=path_arg, fields=fields,
+    field_of=field_of, submitted=submitted, checked=checked, page_id=page_id,
+)
+
+state = _Group(
+    "state",
+    session=session, save_session=save_session, session_get=session_get,
+    session_set=session_set, session_update=session_update,
+    session_pop=session_pop, flash=flash, flashes=flashes,
+)
+
+data = _Group(
+    "data",
+    db=db, read_json=read_json, write_json=write_json, update_json=update_json,
+    read_lines=read_lines, append_line=append_line, counter=counter,
+    data_dir=data_dir, data_path=data_path,
+)
+
+tty = _Group(
+    "tty",
+    term=term, term_ascii=term_ascii, term_line=term_line, term_blank=term_blank,
+    term_cursor=term_cursor, term_passwd=term_passwd,
+)
+
+site = _Group(
+    "site",
+    gen=gen, titles=titles, title_of=title_of, url=url, pages=pages,
+)
+
+flow = _Group("flow", done=done, stop=stop, flush=flush)

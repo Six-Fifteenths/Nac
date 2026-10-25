@@ -58,11 +58,11 @@ def nav(user):
                  nac.inline_path("/login", "登录"),
                  nac.inline_path("/register", "注册")]
     with nac.box("nav"):
-        with nac.row(gap=18):
+        with nac.cols(2):
             with nac.box("brand"):
                 nac.p("conduit")
-            with nac.box():
-                nac.p(*joined(links))
+            nac.col()
+            nac.p(*joined(links))
     nac.gap()
 
 
@@ -92,7 +92,7 @@ def _opt(row, name, default=None):
 
 def byline(row, size=28):
     """头像 + 作者那一行。两栏：左边给头像固定宽度，右边吃掉剩下的。"""
-    with nac.row(gap=10):
+    if True:
         with nac.box():
             nac.avatar(row["author"], size)
         with nac.box():
@@ -176,11 +176,10 @@ def two_columns(left, right=None):
     if right is None:
         left()
         return
-    with nac.row(gap=24):
-        with nac.box():
-            left()
-        with nac.box():
-            right()
+    with nac.cols(2):
+        left()
+        nac.col()
+        right()
 
 
 def joined(bits):

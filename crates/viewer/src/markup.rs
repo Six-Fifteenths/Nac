@@ -272,9 +272,29 @@ fn parse_one(lines: &[&str], i: &mut usize) -> Option<Block> {
         return Some(Block::Heading(level, inlines(rest)));
     }
 
-    if head == "---" {
+    if head == "---" || head == "***" || head == "___" {
         *i += 1;
         return Some(Block::Hr);
+    }
+
+    // ```lang … ``` —— Markdown 的围栏代码块，比 [[code]] 更该是默认写法。
+    if let Some(rest) = t.strip_prefix("```") {
+        let lang = rest.trim().to_string();
+        *i += 1;
+        let mut body: Vec<String> = Vec::new();
+        while *i < lines.len() {
+            let line = lines[*i];
+            if line.trim_start().starts_with("```") {
+                *i += 1;
+                break;
+            }
+            body.push(line.trim_end().to_string());
+            *i += 1;
+        }
+        return Some(Block::Pre {
+            lang: (!lang.is_empty()).then_some(lang),
+            text: body.join("\n"),
+        });
     }
 
     // Stray markers outside their container are dropped rather than shown.
@@ -1048,6 +1068,17 @@ fn bracket_link(inner: &str) -> Option<(LinkTarget, String)> {
     Some((target, text.trim().to_string()))
 }
 
+/// Finds `needle` (a two-character run such as `**`) starting at `from`,
+/// returning the index where it starts. Used so `**a**` closes on `**`, not on
+/// the first `*` of the closing pair.
+fn find_run(cs: &[char], from: usize, needle: &str) -> Option<usize> {
+    let pair: Vec<char> = needle.chars().collect();
+    if pair.len() != 2 || from >= cs.len() {
+        return None;
+    }
+    (from..cs.len().saturating_sub(1)).find(|&j| cs[j] == pair[0] && cs[j + 1] == pair[1])
+}
+
 pub fn inlines(s: &str) -> Vec<Inline> {
     let cs: Vec<char> = s.chars().collect();
     let mut out = Vec::new();
@@ -1076,6 +1107,21 @@ pub fn inlines(s: &str) -> Vec<Inline> {
                 }
             }
         }
+        // Markdown 的强调：`**粗**` / `__粗__`，`*斜*` / `_斜_`。
+        // 两个字符一起看，所以双写优先；单写才是斜体。
+        if (c == '*' || c == '_') && i + 1 < cs.len() && cs[i + 1] == c {
+            let doubled = format!("{c}{c}");
+            if let Some(end) = find_run(&cs, i + 2, &doubled) {
+                if end > i + 2 {
+                    if !buf.is_empty() {
+                        out.push(Inline::Text(std::mem::take(&mut buf)));
+                    }
+                    out.push(Inline::Bold(cs[i + 2..end].iter().collect()));
+                    i = end + 2;
+                    continue;
+                }
+            }
+        }
         if c == '*' || c == '_' || c == '`' {
             if let Some(end) = (i + 1..cs.len()).find(|&j| cs[j] == c) {
                 if end > i + 1 {
@@ -1084,8 +1130,7 @@ pub fn inlines(s: &str) -> Vec<Inline> {
                     }
                     let inner: String = cs[i + 1..end].iter().collect();
                     out.push(match c {
-                        '*' => Inline::Bold(inner),
-                        '_' => Inline::Italic(inner),
+                        '*' | '_' => Inline::Italic(inner),
                         _ => Inline::Code(inner),
                     });
                     i = end + 1;
@@ -1230,7 +1275,7 @@ mod tests {
         let src = "[[box class=card pad=16]]\n[[h3?]]\n正文\n[[end]]\n";
         match only(&parse(&src.replace("[[h3?]]", "# 标题"))) {
             Block::Box { style, children } => {
-                assert_eq!(style.pad, Some((16.0, 16.0)));
+                assert_eq!(style.class.as_deref(), Some("card"));
                 assert_eq!(children.len(), 2);
                 assert!(matches!(children[0], Block::Heading(1, _)));
             }
@@ -1264,12 +1309,12 @@ mod tests {
     fn a_sheet_rule_is_one_class_name_and_nothing_else() {
         let src = concat!(
             "[[sheet]]\n",
-            ".card { pad: 16; }\n",
-            "card { pad: 8; }\n",
-            ".a .b { pad: 4; }\n",
-            ".a > .b { pad: 2; }\n",
-            "@media (max-width: 600px) { pad: 1; }\n",
-            ".a:hover { pad: 0; }\n",
+            ".card { radius: 16; }\n",
+            "card { radius: 8; }\n",
+            ".a .b { radius: 4; }\n",
+            ".a > .b { radius: 2; }\n",
+            "@media (max-width: 600px) { radius: 1; }\n",
+            ".a:hover { radius: 0; }\n",
             "[[end]]\n"
         );
         match only(&parse(src)) {
@@ -1277,7 +1322,7 @@ mod tests {
                 let names: Vec<&str> = rules.iter().map(|(n, _)| n.as_str()).collect();
                 // `.card` and `card` are the same class; the second rule wins.
                 assert_eq!(names, vec!["card"]);
-                assert_eq!(rules[0].1.pad, Some((8.0, 8.0)));
+                assert_eq!(rules[0].1.radius, Some(8.0));
             }
             other => panic!("expected a sheet, got {other:?}"),
         }
@@ -1425,9 +1470,38 @@ mod tests {
 
     #[test]
     fn inline_runs() {
+        // Markdown 的强调规则：单星号斜体、双星号粗体。
         let parts = inlines("a *b* c");
         assert_eq!(parts.len(), 3);
-        assert_eq!(parts[1], Inline::Bold("b".into()));
+        assert_eq!(parts[1], Inline::Italic("b".into()));
+
+        let bold = inlines("a **b** c");
+        assert_eq!(bold.len(), 3);
+        assert_eq!(bold[1], Inline::Bold("b".into()));
+
+        // 粗体里还能套代码：`**` 先闭合，不会吃掉中间的反引号。
+        let mixed = inlines("**a `b` c**");
+        assert_eq!(mixed.len(), 1);
+        assert_eq!(mixed[0], Inline::Bold("a `b` c".into()));
+    }
+
+    #[test]
+    fn a_fence_becomes_a_code_block_with_its_language() {
+        let src = "```python\nprint(1)\nprint(2)\n```\n";
+        match only(&parse(src)) {
+            Block::Pre { lang, text } => {
+                assert_eq!(lang.as_deref(), Some("python"));
+                assert_eq!(text, "print(1)\nprint(2)");
+            }
+            other => panic!("期望代码块，得到 {other:?}"),
+        }
+        // 没写语言也行，后面的文字不会被吞。
+        let plain = parse("```\nx\n```\n\n后面一段\n");
+        assert!(matches!(plain[0], Block::Pre { lang: None, .. }));
+        assert!(
+            plain.iter().any(|b| matches!(b, Block::Para(_))),
+            "代码块后面的文字要留下来：{plain:?}"
+        );
     }
 
     #[test]
@@ -1478,7 +1552,7 @@ mod tests {
 
     #[test]
     fn table_takes_the_first_row_as_header() {
-        let src = "[[table]]\n| 名字 | 说明 |\n| 甲 | *第一* |\n| 乙 | 第二 |\n[[end]]\n";
+        let src = "[[table]]\n| 名字 | 说明 |\n| 甲 | **第一** |\n| 乙 | 第二 |\n[[end]]\n";
         match only(&parse(src)) {
             Block::Table { header, rows } => {
                 assert_eq!(header.len(), 2);

@@ -141,6 +141,47 @@ nac.p("读者看到的是这一行")                     # 进页面
 
 ## 2. nac 函数全表
 
+### 2.0 先看分类：十个命名空间
+
+函数一个都没少，`nac.p(...)` 照样能用。但 `nac` 底下分了十个组，
+让"这一页在干什么"一眼看得出来，也让 `dir()` 和补全不再是一坨：
+
+| 命名空间 | 管什么 | 下面几节 |
+|---|---|---|
+| `nac.text` | 文字与块：段落、标题、粗斜体、列表、表格、代码块 | B C |
+| `nac.links` | 链接与站内导航：`link_path` / `inline_path` / `nav` / `redirect` | F |
+| `nac.skin` | 面板与外观：提示框、页签、盒子、头像、图片 | D E |
+| `nac.forms` | 表单：字段、按钮、预填 | G |
+| `nac.req` | 这一次请求：地址参数、表单内容、是不是提交 | H |
+| `nac.state` | 会话与一次性提示 | I |
+| `nac.data` | 站点的数据：JSON、计数、SQLite | J |
+| `nac.tty` | 终端面板（`[[term]]`） | 10 |
+| `nac.site` | 本站自身：有几页、这一页叫什么 | A |
+| `nac.flow` | 收尾：`done()` / `stop()` / `flush()` | K |
+
+```python
+import nac
+
+nac.text.p("正文")
+nac.text.b("重点")
+nac.forms.field("title", "标题")
+nac.data.db()
+if nac.req.submitted():
+    ...
+```
+
+两种写法等价：`nac.text.p is nac.p` 是 `True`。用哪边都行，混用也行 ——
+新写的页面建议走分类，读起来更像"这一段在干什么"。
+
+写错了会直接报出来，不会静默无效：
+
+```python
+>>> nac.text.nope
+AttributeError: nac.text 里没有 'nope'
+```
+
+---
+
 生成的 `nac.py` 分成 11 节，**只有 C/D/E/F/G 会往页面上写内容**。
 
 ### A. 环境
@@ -646,8 +687,8 @@ with nac.term("WebShell.x64_x86", target=nac.page_id()):
 
 ```
 [[sheet]]
-.card { bg: #ffffff; border: 1px:#dddddd; radius: 4; pad: 20; shadow: 8,2:#0000001f; }
-.nav  { bg: #5cb85c; color: #ffffff; pad: 8,16; weight: bold; link: #ffffff; }
+.card { bg: #ffffff; border: 1px:#dddddd; radius: 4; shadow: 8,2:#0000001f; }
+.nav  { bg: #5cb85c; color: #ffffff; weight: bold; link: #ffffff; }
 [[end]]
 
 [[box class=card]]
@@ -671,9 +712,6 @@ with nac.term("WebShell.x64_x86", target=nac.page_id()):
 | `radius` | `4` | 圆角 |
 | `shadow` | `8` 或 `8,2` 或 `8,2:#0000001f` | 模糊半径[,向下偏移][:颜色] |
 | `opacity` | `0.6` 或 `60` | 整块透明度，两种写法都是 60% |
-| `pad` / `margin` | `12` 或 `12,16` | 横向,纵向 |
-| `gap` | `12` | 横排时子盒子之间的距离 |
-| `dir` | `row` / `col` | 横排还是竖排（默认竖排） |
 | `ta` | `center` / `left` / `right` | 盒子里**文字**的对齐 |
 | `size` / `weight` | `16` / `bold` | 字号、字重（继承） |
 | `font` | `sans` / `serif` / `mono` | 字体族（继承，见 11.4） |
@@ -683,33 +721,33 @@ with nac.term("WebShell.x64_x86", target=nac.page_id()):
 
 数值只接受 `16` 或 `16px`。`50%`、`calc(...)`、`2em` 会被**当成没写**，因为它不是数字。
 
+**没有内边距、没有间距、没有宽度、没有方向。** 带底色或描边的盒子由客户端统一给
+14×12 的内边距；再想要别的间距，不是页面能说的事。
+
 ```python
-nac.sheet(".card { bg: #fff; border: 1px:#ddd; radius: 4; pad: 20; shadow: 8,2:#0000001f; }")
+nac.sheet(".card { bg: #fff; border: 1px:#ddd; radius: 4; shadow: 8,2:#0000001f; }")
 
 with nac.box("card"):                 # 位置参数是类名
     nac.h3("标题")
     nac.p("正文")
 
-with nac.row(gap=24):                 # 横排
-    with nac.box():                   # 左边
-        ...
-    with nac.box():                   # 右边
-        ...
+with nac.cols(2):                     # 并排成两栏，宽度客户端平分
+    nac.p("左边")
+    nac.col()
+    nac.p("右边")
 
 nac.avatar("张三", 28)                # 见 11.4
 ```
 
 `class` 是 Python 关键字，所以类名用第一个位置参数传，或者写 `cls="card"`。
 
-### 11.2 横排的宽度是客户端算的（`dir=row`）
+### 11.2 没有横排
 
-页面能说的只有「这几个块并排」，剩下的由客户端定：
+盒子只能上下堆叠。想并排，唯一的办法是 `nac.cols(n)`：它说的是"这几段并排放"，
+每列多宽由客户端平分，页面说不上话。盒子里不能塞横排。
 
-- **只有一个头像的盒子**（里面只有 `nac.avatar(...)`）→ 宽 = 头像的尺寸
-- **其余子盒子** → 平分剩下的宽度，再减去 `gap`
-
-所以 2:1 分栏做不到，也**不需要**做到 —— 想要主次，可以少放一栏，
-或者用字号和留白来表达。想精确控制比例的排版，是这一层明确不接受的需求。
+这不是没做完，是决定：一旦页面能指定"两栏按 2:1 分"，它就开始承担布局引擎的
+工作，而那是另一个项目。
 
 ### 11.3 这一层不会长成 CSS
 

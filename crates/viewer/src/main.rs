@@ -497,20 +497,8 @@ const FONT_SANS: &[u8] = include_bytes!("../assets/fonts/TitilliumWeb-Regular.tt
 const FONT_SANS_BOLD: &[u8] = include_bytes!("../assets/fonts/TitilliumWeb-Bold.ttf");
 const FONT_SERIF: &[u8] = include_bytes!("../assets/fonts/PTSerif-Regular.ttf");
 const FONT_SERIF_BOLD: &[u8] = include_bytes!("../assets/fonts/PTSerif-Bold.ttf");
-
-/// The width the client reserves for a row child, when it can know it up front.
-///
-/// Only one case qualifies: a box whose whole content is an avatar.
-fn row_child_width(child: &Block) -> Option<f32> {
-    match child {
-        Block::Box { children, .. } if children.len() == 1 => match &children[0] {
-            Block::Avatar { size, .. } => Some(*size),
-            _ => None,
-        },
-        Block::Avatar { size, .. } => Some(*size),
-        _ => None,
-    }
-}
+/// What every box with a background or a border pads itself by.
+const BOX_PAD: (f32, f32) = (14.0, 12.0);
 
 fn fnv1a(bytes: &[u8]) -> u64 {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
@@ -1743,15 +1731,15 @@ impl Tab {
         let merged = style.over(&class);
         let inner = text.inherit(&merged);
 
-        let margin = merged.margin.unwrap_or((0.0, 0.0));
-        if margin.1 > 0.0 {
-            ui.add_space(margin.1);
-        }
-
         let available = ui.available_width();
-        let mut rect = ui.available_rect_before_wrap();
-        rect.min.x += margin.0;
-        let pad = merged.pad.unwrap_or((0.0, 0.0));
+        let rect = ui.available_rect_before_wrap();
+        // 内边距是客户端的事：有底色或描边的盒子自己知道要让文字离边远一点，
+        // 页面不用（也不能）说这个数。
+        let pad = if merged.bg.is_some() || merged.border.is_some() {
+            BOX_PAD
+        } else {
+            (0.0, 0.0)
+        };
         let mut frame = egui::Frame::new().inner_margin(egui::Margin {
             left: pad.0 as i8,
             right: pad.0 as i8,
@@ -1781,7 +1769,7 @@ impl Tab {
                 .max_rect(rect)
                 .layout(Layout::top_down(Align::Min)),
             |ui| {
-                let width = available - margin.0;
+                let width = available;
                 ui.set_min_width(width);
                 ui.set_max_width(width);
                 if let Some(amount) = merged.opacity {
@@ -1791,9 +1779,7 @@ impl Tab {
                     let inside = (width - pad.0 * 2.0).max(20.0);
                     ui.set_min_width(inside);
                     ui.set_max_width(inside);
-                    if merged.row == Some(true) {
-                        self.render_row(ui, children, &merged, inner);
-                    } else {
+                    {
                         let cross = match inner.align {
                             Some(style::Align::Center) => egui::Align::Center,
                             Some(style::Align::Right) => egui::Align::Max,
@@ -1810,9 +1796,6 @@ impl Tab {
                 })
             },
         );
-        if margin.1 > 0.0 {
-            ui.add_space(margin.1);
-        }
     }
 
     /// A monogram avatar: the name picks a colour, the name's first letter is
@@ -1838,56 +1821,6 @@ impl Tab {
             FontId::new(size * 0.46, Text::default().bold_family()),
             Color32::WHITE,
         );
-    }
-
-    fn render_row(&mut self, ui: &mut egui::Ui, children: Vec<Block>, style: &Style, text: Text) {
-        let gap = style.gap.unwrap_or(12.0);
-        let area = ui.available_rect_before_wrap();
-        let count = children.len();
-        if count == 0 {
-            return;
-        }
-
-        let mut fixed: Vec<Option<f32>> = children.iter().map(row_child_width).collect();
-        let taken: f32 = fixed.iter().flatten().sum();
-        let flexible = fixed.iter().filter(|w| w.is_none()).count();
-        let share = if flexible == 0 {
-            0.0
-        } else {
-            (area.width() - gap * (count - 1) as f32 - taken).max(20.0) / flexible as f32
-        };
-        for slot in fixed.iter_mut() {
-            if slot.is_none() {
-                *slot = Some(share);
-            }
-        }
-
-        let mut x = area.min.x;
-        let mut bottom = area.min.y;
-        for (slot, child) in children.into_iter().enumerate() {
-            let width = fixed[slot].unwrap_or(share);
-            let rect = egui::Rect::from_min_max(
-                egui::pos2(x, area.min.y),
-                egui::pos2(x + width, area.max.y),
-            );
-            let drawn = ui.scope_builder(
-                egui::UiBuilder::new()
-                    .max_rect(rect)
-                    .layout(Layout::top_down(Align::Min)),
-                |ui| {
-                    ui.set_min_width(width);
-                    ui.set_max_width(width);
-                    self.render_box(ui, &Style::default(), vec![child], text);
-                    ui.min_rect().bottom()
-                },
-            );
-            bottom = bottom.max(drawn.inner);
-            x += width + gap;
-        }
-
-        // One allocation for the whole row: the boxes inside placed themselves.
-        let used = egui::Rect::from_min_max(area.min, egui::pos2(area.max.x, bottom));
-        ui.allocate_rect(used, egui::Sense::hover());
     }
 
     fn render_term(&mut self, ui: &mut egui::Ui, term: &markup::Term) {

@@ -64,18 +64,9 @@ pub struct Style {
     pub class: Option<String>,
     pub bg: Option<Color32>,
     pub color: Option<Color32>,
-    /// Horizontal, vertical.
-    pub pad: Option<(f32, f32)>,
-    /// Horizontal, vertical.
-    pub margin: Option<(f32, f32)>,
-    pub gap: Option<f32>,
     pub radius: Option<f32>,
     /// Width, colour.
     pub border: Option<(f32, Color32)>,
-    /// `dir=row`. `None` means column, which is the document default. This is
-    /// the only layout attribute there is: the client, not the page, decides
-    /// how wide the columns turn out.
-    pub row: Option<bool>,
     /// Where the text sits inside its box.
     pub text_align: Option<Align>,
     pub size: Option<f32>,
@@ -97,12 +88,8 @@ impl Style {
             class: self.class.clone().or_else(|| base.class.clone()),
             bg: self.bg.or(base.bg),
             color: self.color.or(base.color),
-            pad: self.pad.or(base.pad),
-            margin: self.margin.or(base.margin),
-            gap: self.gap.or(base.gap),
             radius: self.radius.or(base.radius),
             border: self.border.or(base.border),
-            row: self.row.or(base.row),
             text_align: self.text_align.or(base.text_align),
             size: self.size.or(base.size),
             weight: self.weight.or(base.weight),
@@ -123,18 +110,8 @@ impl Style {
         match key.as_str() {
             "bg" | "background" => self.bg = color(value),
             "color" | "fg" => self.color = color(value),
-            "pad" | "padding" => self.pad = pair(value),
-            "margin" => self.margin = pair(value),
-            "gap" => self.gap = number(value),
             "radius" | "border-radius" => self.radius = number(value),
             "border" => self.border = border(value),
-            "dir" | "display" => {
-                self.row = match value {
-                    "row" | "flex" | "horizontal" => Some(true),
-                    "col" | "column" | "vertical" | "block" => Some(false),
-                    _ => None,
-                }
-            }
             "ta" | "text-align" | "halign" => {
                 self.text_align = match value {
                     "center" => Some(Align::Center),
@@ -293,14 +270,6 @@ fn opacity(value: &str) -> Option<f32> {
     Some(fraction.clamp(0.0, 1.0))
 }
 
-/// `16` → (16,16); `16,24` → (16,24).
-fn pair(value: &str) -> Option<(f32, f32)> {
-    let mut parts = value.split(',');
-    let first = number(parts.next()?)?;
-    let second = parts.next().and_then(number).unwrap_or(first);
-    Some((first, second))
-}
-
 /// `#rrggbb`, `#rgb`, or a few names.
 pub fn color(value: &str) -> Option<Color32> {
     let value = value.trim();
@@ -352,22 +321,22 @@ mod tests {
 
     #[test]
     fn attributes_and_declarations_agree() {
-        let a = Style::from_attrs("pad=12 bg=#ffffff border=1:#dddddd");
-        let b = Style::from_declarations("pad: 12; bg: #fff; border: 1:#ddd;");
-        assert_eq!(a.pad, b.pad);
+        let a = Style::from_attrs("radius=12 bg=#ffffff border=1:#dddddd");
+        let b = Style::from_declarations("radius: 12; bg: #fff; border: 1:#ddd;");
+        assert_eq!(a.radius, b.radius);
         assert_eq!(a.bg, b.bg);
         assert_eq!(a.border, b.border);
-        assert_eq!(a.pad, Some((12.0, 12.0)));
+        assert_eq!(a.radius, Some(12.0));
     }
 
     #[test]
     fn a_class_is_overridden_by_an_attribute() {
-        let base = Style::from_declarations("bg: #fff; pad: 16; radius: 4;");
-        let over = Style::from_attrs("pad=4");
+        let base = Style::from_declarations("bg: #fff; radius: 16; border: 1:#ddd;");
+        let over = Style::from_attrs("radius=4");
         let merged = over.over(&base);
         assert_eq!(merged.bg, base.bg, "class keeps what the attribute omits");
-        assert_eq!(merged.pad, Some((4.0, 4.0)), "attribute wins");
-        assert_eq!(merged.radius, Some(4.0));
+        assert_eq!(merged.border, base.border);
+        assert_eq!(merged.radius, Some(4.0), "attribute wins");
     }
 
     #[test]
@@ -425,14 +394,17 @@ mod tests {
             "position=absolute x=10 y=20 top=4 left=4 float=left w=200 maxw=980 grow=2 \
              minh=40 align=center",
         );
-        assert_eq!(placed.pad, None);
-        assert_eq!(placed.margin, None);
-        assert_eq!(placed.row, None);
         assert_eq!(placed.text_align, None);
+        assert_eq!(placed.bg, None);
+        // 间距、方向、内边距这一类已经不在属性表里了：它们连解析都不进。
+        assert_eq!(
+            Style::from_attrs("pad=16 margin=8 gap=4 dir=row"),
+            Style::default()
+        );
 
         // 3. No media queries, no animation beyond the hover fade.
-        let media = Style::from_declarations("@media (max-width: 600px): pad: 4;");
-        assert_eq!(media.pad, None);
+        let media = Style::from_declarations("@media (max-width: 600px): radius: 4;");
+        assert_eq!(media.radius, None);
     }
 
     #[test]

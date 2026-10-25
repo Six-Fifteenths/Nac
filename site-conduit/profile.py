@@ -37,10 +37,10 @@ page = 1
 if tab == "favorites" and len(parts) > 2 and parts[2].isdigit():
     page = int(parts[2])
 
-with nac.row(gap=14):
-    with nac.box():
-        nac.avatar(name, 64)
-    with nac.box():
+with nac.cols(2):
+    nac.avatar(name, 64)
+    nac.col()
+    if True:
         nac.h1(name)
         if who["bio"]:
             nac.p(nac.i(who["bio"]))
