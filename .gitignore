@@ -15,7 +15,3 @@ access.jsonl
 # 只作参考的上游项目（第三方代码，不进本仓库）
 /gurted
 __pycache__/
-
-# deploy/ 下的临时件：字体副本和由 reference.html 生成的本地版
-deploy/fonts/
-deploy/reference-local.html
