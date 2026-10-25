@@ -297,13 +297,17 @@ fn load_tls(cert: &Path, key: &Path) -> Result<Arc<ServerConfig>, String> {
 /// one authority holding the whole table.
 ///
 /// ```json
-/// {"home": {"host": "1.2.3.4", "port": 7000, "tls": true, "title": "演示站"}}
+/// {"nac.local": {"host": "1.2.3.4", "port": 7000, "tls": true, "title": "演示站"}}
 /// ```
-fn lookup_site(state: &State, wanted: &str) -> Option<(String, bool, String)> {
+///
+/// The reply carries the registry's own spelling of the name, not the one that
+/// was asked for: a reader who types `ex_myth` should end up with the address
+/// bar showing `EX_MYTH`, the name the site actually uses.
+fn lookup_site(state: &State, wanted: &str) -> Option<(String, String, bool, String)> {
     let path = state.registry.as_ref()?;
     let text = fs::read_to_string(path).ok()?;
     let value: serde_json::Value = serde_json::from_str(&text).ok()?;
-    let entry = value.get(wanted)?;
+    let (canonical, entry) = registry_match(value.as_object()?, wanted)?;
     let host = entry.get("host")?.as_str()?;
     let port = entry.get("port")?.as_u64()?;
     let tls = entry.get("tls").and_then(|v| v.as_bool()).unwrap_or(false);
@@ -312,7 +316,24 @@ fn lookup_site(state: &State, wanted: &str) -> Option<(String, bool, String)> {
         .and_then(|v| v.as_str())
         .unwrap_or_default()
         .to_string();
-    Some((format!("{host}:{port}"), tls, title))
+    Some((canonical, format!("{host}:{port}"), tls, title))
+}
+
+/// Finds an entry and the spelling the table uses for it.
+///
+/// Exact first, so the common case costs one lookup; then a scan that ignores
+/// case, because a name is not a password.
+fn registry_match<'a>(
+    table: &'a serde_json::Map<String, serde_json::Value>,
+    wanted: &str,
+) -> Option<(String, &'a serde_json::Value)> {
+    if let Some(entry) = table.get(wanted) {
+        return Some((wanted.to_string(), entry));
+    }
+    let (key, entry) = table
+        .iter()
+        .find(|(key, _)| key.eq_ignore_ascii_case(wanted))?;
+    Some((key.clone(), entry))
 }
 
 fn handle<S: Read + Write>(mut stream: S, state: Arc<State>) -> std::io::Result<()> {
@@ -338,12 +359,12 @@ fn handle<S: Read + Write>(mut stream: S, state: Arc<State>) -> std::io::Result<
 
     if let Request::Resolve(wanted) = &msg.request {
         return match lookup_site(&state, wanted) {
-            Some((endpoint, tls, title)) => {
+            Some((canonical, endpoint, tls, title)) => {
                 log_line(&state, None, "resolve", started, 2, None);
                 send(
                     &mut stream,
                     &[ServerMsg::Resolved {
-                        name: wanted.clone(),
+                        name: canonical,
                         endpoint,
                         tls,
                         title,
@@ -868,7 +889,32 @@ fn read_capped<R: Read>(mut r: R, limit: usize) -> (Vec<u8>, bool) {
 
 #[cfg(test)]
 mod tests {
-    use super::root_from_status;
+    use super::{registry_match, root_from_status};
+
+    #[test]
+    fn a_registry_name_is_found_whatever_the_caps() {
+        // The point: `EX_MYTH` is a legal name here, and someone typing it in
+        // lower case should still land, with the table's spelling coming back.
+        let text = r#"{
+            "nac.local": {"host": "1.2.3.4", "port": 7000},
+            "EX_MYTH": {"host": "1.2.3.4", "port": 7002},
+            "iris.out": {"host": "1.2.3.4", "port": 7003}
+        }"#;
+        let value: serde_json::Value = serde_json::from_str(text).unwrap();
+        let table = value.as_object().unwrap();
+
+        let (name, entry) = registry_match(table, "EX_MYTH").unwrap();
+        assert_eq!(name, "EX_MYTH");
+        assert_eq!(entry.get("port").unwrap().as_u64(), Some(7002));
+
+        let (name, _) = registry_match(table, "ex_myth").unwrap();
+        assert_eq!(name, "EX_MYTH", "应当返回表里的写法");
+
+        let (name, _) = registry_match(table, "Iris.Out").unwrap();
+        assert_eq!(name, "iris.out");
+
+        assert!(registry_match(table, "nope").is_none());
+    }
 
     #[test]
     fn detects_root_from_proc_status() {

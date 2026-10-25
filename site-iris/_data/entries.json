@@ -1,0 +1,61 @@
+{
+  "_note": "一份很小的清单：看过的东西。score 为 0 表示没打分。",
+  "entries": [
+    {
+      "slug": "pattern-language",
+      "title": "建筑的永恒之道",
+      "kind": "书",
+      "year": 1979,
+      "score": 5,
+      "note": "讲的是「什么样的结构让人愿意待着」。和软件关系不大，和写页面关系很大。"
+    },
+    {
+      "slug": "night-on-the-galactic-railroad",
+      "title": "银河铁道之夜",
+      "kind": "书",
+      "year": 1934,
+      "score": 4,
+      "note": "所有明亮的意象底下都是一次告别。读第二遍才看出来。"
+    },
+    {
+      "slug": "blue",
+      "title": "蓝",
+      "kind": "专辑",
+      "year": 1971,
+      "score": 5,
+      "note": "整张专辑像一个人在用最少的词汇说最重的话。"
+    },
+    {
+      "slug": "solaris",
+      "title": "飞向太空",
+      "kind": "电影",
+      "year": 1972,
+      "score": 4,
+      "note": "节奏慢到让人不适，但那正是它要说的事。"
+    },
+    {
+      "slug": "the-art-of-noticing",
+      "title": "注意力的艺术",
+      "kind": "书",
+      "year": 2011,
+      "score": 3,
+      "note": "前半本很好，后半本开始重复自己。"
+    },
+    {
+      "slug": "paterson",
+      "title": "帕特森",
+      "kind": "电影",
+      "year": 2016,
+      "score": 5,
+      "note": "一个人一周里写下的诗，和一条公交线路。够了。"
+    },
+    {
+      "slug": "kiln",
+      "title": "窑",
+      "kind": "展览",
+      "year": 2024,
+      "score": 0,
+      "note": "没打分。看完在里面坐了很久。"
+    }
+  ]
+}

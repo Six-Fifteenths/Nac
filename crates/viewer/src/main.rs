@@ -88,6 +88,107 @@ fn alert(text: &str) {
     eprintln!("{text}");
 }
 
+/// What clicking a tab did.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TabHit {
+    None,
+    Switch,
+    Close,
+}
+
+/// One tab: a rounded chip with the page title, and a `×` when it can be closed.
+///
+/// The title is capped so one long page does not push every other tab sideways;
+/// middle-click closes it, the way a browser does.
+fn tab_chip(ui: &mut egui::Ui, tab: &Tab, active: bool, can_close: bool) -> TabHit {
+    let title = if tab.title.is_empty() {
+        tab.address_text()
+    } else {
+        tab.title.clone()
+    };
+    let label = shorten(&title, 20);
+    let mut hit = TabHit::None;
+
+    let fill = if active {
+        Color32::from_rgb(233, 238, 250)
+    } else {
+        Color32::from_rgb(245, 245, 248)
+    };
+    let stroke = if active {
+        egui::Stroke::new(1.0, Color32::from_rgb(190, 202, 232))
+    } else {
+        egui::Stroke::new(1.0, Color32::from_rgb(232, 232, 236))
+    };
+
+    egui::Frame::new()
+        .fill(fill)
+        .stroke(stroke)
+        .corner_radius(egui::CornerRadius::same(6))
+        .inner_margin(egui::Margin::symmetric(9, 4))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                let name = ui.add(
+                    egui::Label::new(
+                        RichText::new(label)
+                            .size(13.5)
+                            .color(if active {
+                                Color32::from_rgb(30, 40, 70)
+                            } else {
+                                Color32::from_rgb(90, 95, 105)
+                            }),
+                    )
+                    .sense(egui::Sense::click()),
+                );
+                if name.clicked() {
+                    hit = TabHit::Switch;
+                }
+                if name.middle_clicked() && can_close {
+                    hit = TabHit::Close;
+                }
+                name.on_hover_text(title);
+
+                if can_close {
+                    let close = ui.add(
+                        egui::Label::new(
+                            RichText::new("×")
+                                .size(13.0)
+                                .color(Color32::from_rgb(150, 155, 165)),
+                        )
+                        .sense(egui::Sense::click()),
+                    );
+                    if close.clicked() {
+                        hit = TabHit::Close;
+                    }
+                    close.on_hover_text("关闭标签页  (Ctrl+W)");
+                }
+            });
+        });
+    hit
+}
+
+/// Caps a title so a narrow window still fits a few tabs. Counts characters, not
+/// bytes, so a Chinese title is cut at a sensible place.
+fn shorten(text: &str, limit: usize) -> String {
+    if text.chars().count() <= limit {
+        return text.to_string();
+    }
+    let mut out: String = text.chars().take(limit.saturating_sub(1)).collect();
+    out.push('…');
+    out
+}
+
+/// A hairline under the tab strip, so the strip reads as one and the toolbar
+/// below does not float in the page.
+fn strip_line(ui: &egui::Ui) {
+    let rect = ui.available_rect_before_wrap();
+    ui.painter().hline(
+        rect.x_range(),
+        rect.top(),
+        egui::Stroke::new(1.0, Color32::from_rgb(226, 226, 232)),
+    );
+}
+
 fn main() -> eframe::Result<()> {
     report_panics();
 
@@ -160,9 +261,15 @@ fn main() -> eframe::Result<()> {
         return Ok(());
     }
 
-    let (mut routes, from_embedded) = build_routes(routes_path.as_deref(), addr);
-    routes.apply_env_domain();
-    tls::set_server_name(routes.domain());
+    let (routes, from_embedded) = build_routes(routes_path.as_deref(), addr);
+    // The SNI name is cosmetic here (the certificate is pinned, not name-checked),
+    // so the default site's name is good enough.
+    tls::set_server_name(
+        routes
+            .default_site()
+            .map(|site| site.name.as_str())
+            .unwrap_or(routes::DEFAULT_DOMAIN),
+    );
     // A site marked `tls` cannot work without a pin, and the failure would
     // otherwise show up only as "cannot connect". Say it once, up front.
     if !plaintext && !tls::has_pin() {
@@ -495,9 +602,12 @@ impl Trail {
 
 /// Reads an address the way a browser does.
 ///
-/// Accepted: `<domain>/`, `<domain>/about`, `about`, `/about`,
-/// `home.<domain>/about`, and the legacy `home/7` / `nac://home/7`. The suffix
-/// comes from `routes.domain()` so a deployment may use its own.
+/// Accepted: `<host>/`, `<host>/about`, `about`, `/about`, and the legacy
+/// `nac://<host>/7`. A **host is just a site's name** — there is no shared
+/// suffix and no sub-domain rule, so `nac.local`, `iris.out`, `shop.nac.local`
+/// and `EX_MYTH` are all equally valid and are matched by exact name (ignoring
+/// case). Anything not in the table is treated as a name to look up, not as a
+/// typo.
 /// Endpoints are not accepted here on purpose — they live in the routes file,
 /// so nothing the user types or sees has to contain one.
 fn parse_address(input: &str, routes: &routes::Routes, current_site: &str) -> Option<Address> {
@@ -521,22 +631,22 @@ fn parse_address(input: &str, routes: &routes::Routes, current_site: &str) -> Op
             Some((host, tail)) => (host, normalize_path(&format!("/{tail}"))?),
             None => (s, "/".to_string()),
         };
-        if let Some(site) = origin_site(host, routes, current_site) {
-            return Some(Address::Known { site, path });
-        }
-        if routes.get(host).is_some() {
+        if let Some(site) = routes.get(host) {
             return Some(Address::Known {
-                site: host.to_string(),
+                site: site.name.clone(),
                 path,
             });
         }
-        if let Some(name) = unknown_origin(host, routes.domain()) {
-            return Some(Address::Unknown { site: name, path });
-        }
-        // A bare word is a path on the current site; anything host-shaped
-        // (dot, port, IPv6 bracket) is not.
-        if s.contains('.') || s.contains(':') || s.contains('[') {
+        // Pasting an endpoint is a mistake, not a path: refuse it rather than
+        // turning the whole thing into a 404 on the current site.
+        if host.contains(':') || host.contains('[') {
             return None;
+        }
+        if looks_like_host(host) {
+            return Some(Address::Unknown {
+                site: host.to_string(),
+                path,
+            });
         }
         return Some(Address::Known {
             site: current_site.to_string(),
@@ -550,39 +660,22 @@ fn parse_address(input: &str, routes: &routes::Routes, current_site: &str) -> Op
     })
 }
 
-/// `shop.<domain>` -> `Some("shop")`. Only single-label names count, so a typo
-/// like `a.b.<domain>` is still rejected instead of being looked up.
-fn unknown_origin(host: &str, domain: &str) -> Option<String> {
-    let suffix = format!(".{}", domain.to_ascii_lowercase());
-    let lowered = host.to_ascii_lowercase();
-    let prefix = lowered.strip_suffix(&suffix)?;
-    if prefix.is_empty()
-        || prefix.contains('.')
-        || !prefix
+/// Whether a typed word should be looked up as a site name rather than read as a
+/// path on the current site.
+///
+/// A name has to *look* like one: a dot or an underscore, the way `iris.out` and
+/// `EX_MYTH` do. That keeps `about` a path, keeps `7` a path, and still lets a
+/// site be called whatever the operator wants — including things no DNS would
+/// accept. A colon means someone pasted an endpoint, which is never an address.
+fn looks_like_host(text: &str) -> bool {
+    !text.is_empty()
+        && text.len() <= 64
+        && !text.contains(':')
+        && !text.chars().any(|c| c.is_whitespace() || c.is_control())
+        && text
             .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-')
-    {
-        return None;
-    }
-    Some(prefix.to_string())
-}
-
-fn origin_site(host: &str, routes: &routes::Routes, current_site: &str) -> Option<String> {
-    let domain = routes.domain();
-    if host.eq_ignore_ascii_case(domain) {
-        return Some(current_site.to_string());
-    }
-    let suffix = format!(".{}", domain.to_ascii_lowercase());
-    let lowered = host.to_ascii_lowercase();
-    let prefix = lowered.strip_suffix(&suffix)?;
-    if prefix.is_empty() {
-        return Some(current_site.to_string());
-    }
-    if routes.get(prefix).is_some() {
-        Some(prefix.to_string())
-    } else {
-        None
-    }
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
+        && (text.contains('.') || text.contains('_'))
 }
 
 fn normalize_path(input: &str) -> Option<String> {
@@ -783,7 +876,7 @@ impl Viewer {
             last_title: String::new(),
         };
         viewer.open_tab(site, start_page);
-        viewer.addr_input = viewer.tab().address_text(&viewer.routes);
+        viewer.addr_input = viewer.tab().address_text();
         viewer
     }
 
@@ -879,13 +972,10 @@ impl Tab {
     }
 
     /// What the user sees: a page on a site, never an endpoint.
-    fn host(&self, routes: &routes::Routes) -> String {
-        let domain = routes.domain();
-        if routes.sites.len() > 1 {
-            format!("{}.{}", self.site, domain)
-        } else {
-            domain.to_string()
-        }
+    /// What the user sees: the site's own name plus the path. A host is just a
+    /// name, so `nac.local/hanoi/4` and `iris.out/about` are the same shape.
+    fn host(&self) -> &str {
+        &self.site
     }
 
     fn path_of(&self, id: u16) -> Option<String> {
@@ -898,13 +988,13 @@ impl Tab {
 
     /// What the user sees: a domain-like origin plus the page path, never an
     /// endpoint or an internal page number.
-    fn address_text(&self, routes: &routes::Routes) -> String {
+    fn address_text(&self) -> String {
         let path = self
             .shown_path
             .clone()
             .or_else(|| self.page_id.and_then(|id| self.path_of(id)))
             .unwrap_or_else(|| "/".to_string());
-        format!("{}{}", self.host(routes), path)
+        format!("{}{}", self.host(), path)
     }
 
     fn bootstrap(&mut self, routes: &routes::Routes) {
@@ -2016,8 +2106,7 @@ impl eframe::App for Viewer {
         }
         if (ctx.input(|i| i.key_pressed(egui::Key::Escape)) && !self.addr_typing)
             || ctx.input(|i| i.modifiers.alt && i.key_pressed(egui::Key::ArrowLeft))
-        {
-            self.with_tab(|tab, routes| tab.back(routes));
+        {            self.with_tab(|tab, routes| tab.back(routes));
             self.pending_sync = true;
         }
         if ctx.input(|i| i.modifiers.alt && i.key_pressed(egui::Key::ArrowRight)) {
@@ -2031,34 +2120,27 @@ impl eframe::App for Viewer {
         let mut add_tab = false;
         let can_close = self.tabs.len() > 1;
         egui::Panel::top("tabs").show(ui, |ui| {
-            ui.add_space(3.0);
+            ui.add_space(5.0);
             ui.horizontal(|ui| {
+                ui.add_space(6.0);
                 for (index, tab) in self.tabs.iter().enumerate() {
-                    let label = if tab.title.is_empty() {
-                        tab.address_text(&self.routes)
-                    } else {
-                        tab.title.clone()
-                    };
-                    if ui
-                        .selectable_label(index == self.active, label)
-                        .clicked()
-                    {
-                        switch_to = Some(index);
+                    match tab_chip(ui, tab, index == self.active, can_close) {
+                        TabHit::Switch => switch_to = Some(index),
+                        TabHit::Close => close = Some(index),
+                        TabHit::None => {}
                     }
-                    if can_close && ui.small_button("×").on_hover_text("关闭标签页  (Ctrl+W)").clicked() {
-                        close = Some(index);
-                    }
-                    ui.add_space(6.0);
+                    ui.add_space(4.0);
                 }
                 if ui
-                    .small_button("+")
+                    .add(egui::Button::new(RichText::new("+").size(15.0)).frame(false))
                     .on_hover_text("新标签页  (Ctrl+T)")
                     .clicked()
                 {
                     add_tab = true;
                 }
             });
-            ui.add_space(3.0);
+            ui.add_space(5.0);
+            strip_line(ui);
         });
         if let Some(index) = switch_to {
             if index != self.active {
@@ -2118,19 +2200,42 @@ impl eframe::App for Viewer {
                 }
 
                 let width = (ui.available_width() - 76.0).max(120.0);
+                let hint = self
+                    .routes
+                    .default_site()
+                    .map(|site| format!("{}/路径", site.name))
+                    .unwrap_or_else(|| "/路径".to_string());
                 let resp = ui.add(
                     egui::TextEdit::singleline(&mut self.addr_input)
                         .font(egui::TextStyle::Monospace)
                         .desired_width(width)
                         .desired_rows(1)
-                        .hint_text(format!("{}/路径", self.routes.domain())),
+                        .margin(egui::Margin::symmetric(8, 5))
+                        .hint_text(hint),
                 );
                 if self.addr_focus {
                     resp.request_focus();
+                    // Ctrl+L is meant to be "replace this", not "append to it".
+                    if let Some(mut state) = egui::TextEdit::load_state(ui.ctx(), resp.id) {
+                        state
+                            .cursor
+                            .set_char_range(Some(egui::text::CCursorRange::two(
+                                egui::text::CCursor::new(0),
+                                egui::text::CCursor::new(self.addr_input.chars().count()),
+                            )));
+                        state.store(ui.ctx(), resp.id);
+                    }
                     self.addr_focus = false;
                 }
-                if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                    goto = Some(self.addr_input.clone());
+                if resp.has_focus() {
+                    if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                        goto = Some(self.addr_input.clone());
+                        resp.surrender_focus();
+                    } else if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                        // Put back what the tab is actually showing and leave.
+                        self.pending_sync = true;
+                        resp.surrender_focus();
+                    }
                 }
                 self.addr_typing = resp.has_focus();
             });
@@ -2159,7 +2264,7 @@ impl eframe::App for Viewer {
         }
 
         // --------------------------------------------------------- status bar
-        let address = self.tab().address_text(&self.routes);
+        let address = self.tab().address_text();
         let status = {
             let tab = self.tab();
             if !tab.error.is_empty() {
@@ -2251,7 +2356,7 @@ impl eframe::App for Viewer {
         });
         self.tab_mut().scroll_top = false;
 
-        let want = self.tab().address_text(&self.routes);
+        let want = self.tab().address_text();
         if self.addr_input != want && (!self.addr_typing || self.pending_sync) {
             self.addr_input = want;
             self.pending_sync = false;
@@ -2262,8 +2367,8 @@ impl eframe::App for Viewer {
 #[cfg(test)]
 mod tests {
     use super::{
-        active_after_close, net, normalize_path, parse_address, resolve_address, resolve_path,
-        routes, stash_fields, Address, Place, Trail,
+        active_after_close, looks_like_host, net, normalize_path, parse_address,
+        resolve_address, resolve_path, routes, shorten, stash_fields, Address, Place, Trail,
     };
     use std::collections::HashMap;
 
@@ -2286,7 +2391,9 @@ mod tests {
     }
 
     fn sites() -> routes::Routes {
-        routes::Routes::parse("home 127.0.0.1:7000\narchive 127.0.0.1:7001\n")
+        routes::Routes::parse(
+            "*nac.local 127.0.0.1:7000\niris.out 127.0.0.1:7002\nEX_MYTH 127.0.0.1:7003\n",
+        )
     }
 
     #[test]
@@ -2351,20 +2458,23 @@ mod tests {
     }
 
     #[test]
-    fn domains_select_the_site_and_path() {
+    fn hosts_select_the_site_and_path() {
         let r = sites();
-        assert_eq!(parse_address("nac.local/", &r, "home"), known("home", "/"));
         assert_eq!(
-            parse_address("nac.local/about", &r, "home"),
-            known("home", "/about")
+            parse_address("nac.local/", &r, "nac.local"),
+            known("nac.local", "/")
         );
         assert_eq!(
-            parse_address("home.nac.local/about", &r, "home"),
-            known("home", "/about")
+            parse_address("nac.local/about", &r, "nac.local"),
+            known("nac.local", "/about")
         );
         assert_eq!(
-            parse_address("archive.nac.local/3", &r, "home"),
-            known("archive", "/3")
+            parse_address("iris.out/notes", &r, "nac.local"),
+            known("iris.out", "/notes")
+        );
+        assert_eq!(
+            parse_address("EX_MYTH/3", &r, "nac.local"),
+            known("EX_MYTH", "/3")
         );
     }
 
@@ -2372,49 +2482,57 @@ mod tests {
     fn named_sites_can_be_switched_by_name() {
         let r = sites();
         assert_eq!(
-            parse_address("archive/3", &r, "home"),
-            known("archive", "/3")
+            parse_address("iris.out/3", &r, "nac.local"),
+            known("iris.out", "/3")
         );
         assert_eq!(
-            parse_address("nac://archive/3", &r, "home"),
-            known("archive", "/3")
+            parse_address("nac://EX_MYTH/3", &r, "nac.local"),
+            known("EX_MYTH", "/3")
         );
-        assert_eq!(parse_address("archive", &r, "home"), known("archive", "/"));
+        assert_eq!(
+            parse_address("iris.out", &r, "nac.local"),
+            known("iris.out", "/")
+        );
     }
 
     #[test]
     fn a_name_the_table_lacks_is_resolved_not_rejected() {
         let r = sites();
+        // The whole name is kept: there is no suffix to strip.
         assert_eq!(
-            parse_address("shop.nac.local/hats", &r, "home"),
-            unknown("shop", "/hats")
+            parse_address("shop.nac.local/hats", &r, "nac.local"),
+            unknown("shop.nac.local", "/hats")
         );
         assert_eq!(
-            parse_address("SHOP.nac.local/", &r, "home"),
-            unknown("shop", "/")
+            parse_address("NOWHERE.out/", &r, "nac.local"),
+            unknown("NOWHERE.out", "/")
         );
-        // Only single-label names under our own suffix are worth a lookup.
-        assert_eq!(parse_address("a.b.nac.local/", &r, "home"), None);
-        assert_eq!(parse_address("shop.test/", &r, "home"), None);
     }
 
     #[test]
     fn a_learned_site_becomes_a_known_one() {
         let mut r = sites();
         assert_eq!(
-            parse_address("shop.nac.local/", &r, "home"),
-            unknown("shop", "/")
+            parse_address("iris.out/", &r, "nac.local"),
+            known("iris.out", "/")
         );
-        r.learn("shop", "10.0.0.5:7100", routes::TlsMode::On);
+        r.learn("nowhere.out", "10.0.0.5:7100", routes::TlsMode::On);
         assert_eq!(
-            parse_address("shop.nac.local/hats", &r, "home"),
-            known("shop", "/hats")
+            parse_address("nowhere.out/notes", &r, "nac.local"),
+            known("nowhere.out", "/notes")
         );
         assert_eq!(
-            r.get("shop").map(|s| s.endpoint.as_str()),
+            parse_address("NOWHERE.OUT/notes", &r, "nac.local"),
+            known("nowhere.out", "/notes")
+        );
+        assert_eq!(
+            r.get("nowhere.out").map(|s| s.endpoint.as_str()),
             Some("10.0.0.5:7100")
         );
-        assert_eq!(r.get("shop").map(|s| s.tls), Some(routes::TlsMode::On));
+        assert_eq!(
+            r.get("nowhere.out").map(|s| s.tls),
+            Some(routes::TlsMode::On)
+        );
     }
 
     #[test]
@@ -2471,37 +2589,60 @@ mod tests {
     }
 
     #[test]
-    fn the_suffix_comes_from_the_file() {
-        // A deployment that does not want the default suffix says so once.
-        let r = routes::Routes::parse("@domain shop.example\n*home 127.0.0.1:7000\n");
-        assert_eq!(r.domain(), "shop.example");
-        assert_eq!(parse_address("shop.example/", &r, "home"), known("home", "/"));
+    fn a_name_is_whatever_the_file_calls_it() {
+        // No suffix and no sub-domain rule: `iris.out` and `EX_MYTH` are just
+        // names, the same way `nac.local` is.
+        let r = sites();
+        assert_eq!(parse_address("nac.local/", &r, "nac.local"), known("nac.local", "/"));
         assert_eq!(
-            parse_address("home.shop.example/about", &r, "home"),
-            known("home", "/about")
+            parse_address("iris.out/notes", &r, "nac.local"),
+            known("iris.out", "/notes")
         );
         assert_eq!(
-            parse_address("notes.shop.example/", &r, "home"),
-            unknown("notes", "/")
+            parse_address("EX_MYTH/", &r, "nac.local"),
+            known("EX_MYTH", "/")
         );
-        // The old default is just a word now, not a site.
-        assert_eq!(parse_address("nac.local/", &r, "home"), None);
+        // Case is not something a reader should have to remember.
+        assert_eq!(
+            parse_address("ex_myth/", &r, "nac.local"),
+            known("EX_MYTH", "/")
+        );
+        // A name the table has not seen is looked up, not rejected.
+        assert_eq!(
+            parse_address("somewhere.else/", &r, "nac.local"),
+            unknown("somewhere.else", "/")
+        );
     }
 
     #[test]
-    fn without_a_directive_the_suffix_is_the_default() {
-        let r = routes::Routes::parse("*home 127.0.0.1:7000\n");
-        assert_eq!(r.domain(), routes::DEFAULT_DOMAIN);
-        assert_eq!(routes::Routes::default().domain(), routes::DEFAULT_DOMAIN);
-        assert_eq!(routes::Routes::single("dev", "1.2.3.4:1").domain(), routes::DEFAULT_DOMAIN);
+    fn a_bare_word_is_a_path_and_a_host_shaped_one_is_not() {
+        let r = sites();
+        // No dot and no underscore: a path on the current site.
+        assert_eq!(
+            parse_address("about", &r, "nac.local"),
+            known("nac.local", "/about")
+        );
+        assert_eq!(parse_address("7", &r, "nac.local"), known("nac.local", "/7"));
+        // Names may use dots and underscores; spaces and colons are not names.
+        assert!(looks_like_host("EX_MYTH"));
+        assert!(looks_like_host("iris.out"));
+        assert!(!looks_like_host("two words"));
+        assert!(!looks_like_host(""));
+        assert!(!looks_like_host("about"));
+        assert!(!looks_like_host("127.0.0.1:7000"));
     }
 
     #[test]
-    fn a_bad_domain_line_is_ignored() {
-        // No dot, so it cannot be mistaken for a host; keep the default instead.
-        let r = routes::Routes::parse("@domain naclocal\n*home 127.0.0.1:7000\n");
-        assert_eq!(r.domain(), routes::DEFAULT_DOMAIN);
-        assert_eq!(r.sites.len(), 1, "站点行不能被 @ 行吃掉");
+    fn a_long_title_is_cut_by_characters_not_bytes() {
+        assert_eq!(shorten("short", 20), "short");
+        assert_eq!(shorten("a".repeat(20).as_str(), 20), "a".repeat(20));
+        assert_eq!(shorten(&"a".repeat(21), 20).chars().count(), 20);
+        assert!(shorten(&"a".repeat(21), 20).ends_with('…'));
+        // 20 Chinese characters are 60 bytes; cutting by bytes would panic.
+        let chinese = "汉".repeat(30);
+        let cut = shorten(&chinese, 20);
+        assert_eq!(cut.chars().count(), 20);
+        assert!(cut.ends_with('…'));
     }
 
     #[test]
@@ -2549,9 +2690,15 @@ mod tests {
     #[test]
     fn endpoints_are_not_addresses() {
         let r = sites();
-        assert_eq!(parse_address("127.0.0.1:7000/1", &r, "home"), None);
-        assert_eq!(parse_address("example.test", &r, "home"), None);
-        assert_eq!(parse_address("example.test/about", &r, "home"), None);
-        assert_eq!(parse_address("/../secret", &r, "home"), None);
+        // An endpoint is not something a reader should ever paste, so it is
+        // refused instead of becoming a 404 on the current site.
+        assert_eq!(parse_address("127.0.0.1:7000/1", &r, "nac.local"), None);
+        assert_eq!(parse_address("[::1]:7000/", &r, "nac.local"), None);
+        // A dot does not make a name wrong — it makes it worth looking up.
+        assert_eq!(
+            parse_address("example.test", &r, "nac.local"),
+            unknown("example.test", "/")
+        );
+        assert_eq!(parse_address("/../secret", &r, "nac.local"), None);
     }
 }

@@ -42,61 +42,18 @@ pub struct Site {
     pub ssh: Option<String>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct Routes {
     pub sites: Vec<Site>,
-    /// The display suffix users type, e.g. `nac.local` in `shop.nac.local`.
-    /// Arbitrary: it never reaches a real resolver, it only distinguishes a site
-    /// name from a path. Set it with an `@domain` line.
-    pub domain: String,
-}
-
-impl Default for Routes {
-    fn default() -> Self {
-        Self {
-            sites: Vec::new(),
-            domain: DEFAULT_DOMAIN.to_string(),
-        }
-    }
 }
 
 impl Routes {
-    /// The suffix to show and accept. Never empty.
-    pub fn domain(&self) -> &str {
-        if self.domain.is_empty() {
-            DEFAULT_DOMAIN
-        } else {
-            &self.domain
-        }
-    }
-
-    /// Lets a deployment rename the suffix without rebuilding: the operator's
-    /// `NAC_DOMAIN` wins over the file.
-    pub fn apply_env_domain(&mut self) {
-        if let Ok(value) = std::env::var("NAC_DOMAIN") {
-            let value = value.trim();
-            if !value.is_empty() {
-                self.domain = value.to_string();
-            }
-        }
-    }
 
     pub fn parse(text: &str) -> Self {
         let mut sites = Vec::new();
-        let mut domain = DEFAULT_DOMAIN.to_string();
         for line in text.lines() {
             let line = line.trim();
             if line.is_empty() || line.starts_with('#') {
-                continue;
-            }
-            // `@domain example.test` — a plain `.local` name collides with
-            // mDNS on some networks, so deployments may want their own.
-            if let Some(rest) = line.strip_prefix('@') {
-                if let Some(value) = rest.split_whitespace().nth(1) {
-                    if looks_like_domain(value) {
-                        domain = value.to_ascii_lowercase();
-                    }
-                }
                 continue;
             }
             let (default, line) = match line.strip_prefix('*') {
@@ -143,7 +100,7 @@ impl Routes {
                 first.default = true;
             }
         }
-        Self { sites, domain }
+        Self { sites }
     }
 
     pub fn single(name: &str, endpoint: &str) -> Self {
@@ -155,7 +112,6 @@ impl Routes {
                 tls: TlsMode::Auto,
                 ssh: None,
             }],
-            domain: DEFAULT_DOMAIN.to_string(),
         }
     }
 
@@ -172,8 +128,13 @@ impl Routes {
         }
     }
 
+    /// Names are matched case-insensitively: `EX_MYTH` and `ex_myth` are the
+    /// same site, because a person typing an address should not have to remember
+    /// which letters were capitalised.
     pub fn get(&self, name: &str) -> Option<&Site> {
-        self.sites.iter().find(|s| s.name == name)
+        self.sites
+            .iter()
+            .find(|s| s.name.eq_ignore_ascii_case(name))
     }
 
     pub fn default_site(&self) -> Option<&Site> {
@@ -216,7 +177,11 @@ impl Routes {
     /// is the only source of these, so the seeded table stays the trust anchor.
     pub fn learn(&mut self, name: &str, endpoint: &str, tls: TlsMode) {
         let endpoint = with_default_port(endpoint.to_string());
-        match self.sites.iter_mut().find(|site| site.name == name) {
+        match self
+            .sites
+            .iter_mut()
+            .find(|site| site.name.eq_ignore_ascii_case(name))
+        {
             Some(site) => {
                 site.endpoint = endpoint;
                 site.tls = tls;
@@ -256,17 +221,10 @@ fn candidates(exe: Option<&Path>) -> Vec<PathBuf> {
     out
 }
 
+/// Shown as the address-bar hint and used for the TLS SNI name. Purely a label:
+/// a site's name is whatever the registry calls it, and this is only the one the
+/// shipped configuration happens to use for its default site.
 pub const DEFAULT_DOMAIN: &str = "nac.local";
-
-/// A suffix has to be something a person could plausibly type as a host: labels
-/// of letters, digits and dashes, separated by dots.
-fn looks_like_domain(text: &str) -> bool {
-    !text.is_empty()
-        && text.contains('.')
-        && text
-            .split('.')
-            .all(|label| !label.is_empty() && label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'))
-}
 
 fn with_default_port(endpoint: String) -> String {
     if endpoint.contains(':') {
