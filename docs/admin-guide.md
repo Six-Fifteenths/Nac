@@ -188,6 +188,44 @@ sudo -u nac-public /srv/nac/bin/publish --site /srv/nac/site --data /srv/nac/dat
 
 运营台页面里也能发布（它被授予了公开站 `data/` 的写权限）。
 
+### 8.1 `nac.py` 是 publish 生成的，所以服务器上那个 publish 会过期
+
+每次发布都会把 `crates/publish/src/nac_py.tmpl` 里的模板写成该代的
+`scripts/nac.py`。也就是说 **`nac.py` 里有哪些函数，由服务器上那个 `publish` 二进制决定**，
+跟站点源码无关。
+
+服务器上没有 Rust，`/srv/nac/bin/publish` 是当初拷上去的。于是会出现这种事：
+
+```
+AttributeError: module 'nac' has no attribute 'sheet'
+```
+
+意思是「站点用了新的 `nac.sheet()`，但服务器那个 publish 还是老版本，它生成的
+`nac.py` 里没有这个函数」。这不是站点写错了。
+
+两种解决办法，按顺序：
+
+1. **在本机发布，把整代产物传上去**（服务器不用装任何东西）：
+
+   ```powershell
+   .\target\release\publish.exe --site site-conduit --data data-conduit
+   $gen = (Get-Content data-conduit\current -Raw).Trim()
+   tar -czf gen.tar.gz -C data-conduit\gen $gen
+   scp gen.tar.gz root@服务器:/tmp/
+   ```
+
+   ```bash
+   tar -xzf /tmp/gen.tar.gz -C /srv/nac-conduit.sh/data/gen/
+   chown -R nac-public:nac-share /srv/nac-conduit.sh/data/gen/$gen
+   printf %s $gen > /srv/nac-conduit.sh/data/current     # 这一步就是上线
+   ```
+
+2. 或者让服务器能重新编译：装 Rust，`cargo build --release -p publish`，
+   再 `install -m 0755 target/release/publish /srv/nac/bin/publish`。
+
+> 判断服务器上的 publish 是不是新的：`grep -c "def sheet" /srv/nac/data/gen/*/scripts/nac.py`
+> 全是 0 就是老版本。
+
 ## 9. 加一个站的完整步骤
 
 一条命令，可重复运行（已存在就更新它）：
