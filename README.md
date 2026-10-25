@@ -35,7 +35,8 @@ cp nac.routes.example nac.routes                        # 填上服务器地址
 ./target/release/viewer
 ```
 
-（Windows 上把后两条分别开两个终端跑 —— 行尾的 `&` 是 Unix 写法。）
+（Windows 上把后两条分别开两个终端跑 —— 行尾的 `&` 是 Unix 写法。
+下面这段命令要是不顺利，[docs/start-here.md](docs/start-here.md) 里有一份带排查步骤的版本。）
 
 窗口里应该出现「一座不经过 HTTP 的小站」，地址栏是 `nac.local/`。
 
@@ -114,8 +115,14 @@ cargo build --release -p viewer          # 产物：target\release\viewer.exe
 
 ## 7. 文档
 
+**第一次来就从 [docs/start-here.md](docs/start-here.md) 开始**：手把手，每一步都有
+"应该看到什么"和"没看到怎么办"，不需要先理解任何概念。
+
+其余文档按用途分：
+
 | 文档 | 给谁看 |
 |---|---|
+| [docs/start-here.md](docs/start-here.md) | **新手**：从零写出一页、看到它、传到服务器 |
 | [docs/user-guide.md](docs/user-guide.md) | 拿到客户端的人：地址栏怎么用、标签页、出问题怎么办 |
 | [docs/authoring.md](docs/authoring.md) | 写页面的人：`nac` 函数全表、标记语法、静态页陷阱 |
 | [docs/admin-guide.md](docs/admin-guide.md) | 站长：构建哪几种 exe、证书与 pin、注册表、运营台 |

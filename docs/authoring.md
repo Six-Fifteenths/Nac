@@ -2,6 +2,9 @@
 
 一个页面 = 一个 Python 程序 = `site/` 下的一个 `.py` 文件。
 
+> 第一次写页面？先看 [start-here.md](start-here.md)，那份是从零开始的一步步教程。
+> 这份是查手册用的。
+
 ```python
 # nac:title 关于
 # nac:path /about
