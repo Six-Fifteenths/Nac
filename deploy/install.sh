@@ -67,9 +67,13 @@ install -d -m 2770 -o "$PUBLIC_USER" -g "$SHARE_GROUP" \
 echo "== TLS 证书"
 install -d -m 0755 -o root -g root /etc/ssl/nac
 if [ ! -s /etc/ssl/nac/public.crt ] || [ ! -s /etc/ssl/nac/public.key ]; then
+    # The name here does not affect verification today (clients pin the
+    # certificate by fingerprint, not by name), but a future real-CA setup would
+    # need it to match the viewer's `@domain`.
+    NAC_CN=${NAC_DOMAIN:-nac.local}
     openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes \
-        -days 3650 -subj "/CN=nac.local" \
-        -addext "subjectAltName=DNS:nac.local" \
+        -days 3650 -subj "/CN=$NAC_CN" \
+        -addext "subjectAltName=DNS:$NAC_CN" \
         -keyout /etc/ssl/nac/public.key -out /etc/ssl/nac/public.crt
 fi
 chown "$PUBLIC_USER:$PUBLIC_USER" /etc/ssl/nac/public.key

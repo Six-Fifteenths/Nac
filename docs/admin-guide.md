@@ -61,12 +61,19 @@ sudo ./deploy/install.sh --bind-public
 ```bash
 export NAC_EMBED_ROUTES='*home <端点的 base64>'
 export NAC_TLS_PIN="$(tr -d '\n' < /etc/ssl/nac/public.pin)"
-cargo build --release --target x86_64-pc-windows-gnu -p viewer --features windows_gui
+cargo build --release --target x86_64-pc-windows-gnu -p viewer
 ```
 
-端点 base64：`./target/release/viewer --routes-encode 主机:端口`。
+`windows_gui` 现在是默认特性，不用再写。端点 base64：`./target/release/viewer --routes-encode 主机:端口`。
 在本服务器上也可以直接用 `/root/scripts/build-nac-viewer-windows.sh --endpoint 主机:端口`。
 生成的 exe 是 GUI 子系统，双击运行，不读任何 `nac.routes`。
+
+想在地址栏换掉 `nac.local` 这个后缀，就把 `@domain 你的域名` 写进 `NAC_EMBED_ROUTES`：
+
+```bash
+export NAC_EMBED_ROUTES='@domain shop.example
+*home <端点base64>'
+```
 
 ## 5. 运营台
 
@@ -78,7 +85,7 @@ cargo build --release --target x86_64-pc-windows-gnu -p viewer --features window
 
 ```bash
 NAC_EMBED_ROUTES='*home <端点base64>' NAC_TLS_PIN=... \
-  cargo build --release -p viewer --features windows_gui
+  cargo build --release -p viewer
 ```
 
 它只认识公网站点，双击即用，没有终端、没有隧道、也没有可以撬出命令执行的东西。
@@ -88,15 +95,15 @@ NAC_EMBED_ROUTES='*home <端点base64>' NAC_TLS_PIN=... \
 多一个 `admin` 特性，它才允许客户端自己拉起 `ssh -N -L`：
 
 ```bash
-# 日常使用：GUI 子系统，双击运行，不会出现任何终端窗口
-cargo build --release -p viewer --features admin,windows_gui
-
-# 排障用：控制台子系统，会带一个终端窗口，但 --routes-check / --selftest 有输出
+# 日常使用：默认就是 GUI 子系统，双击运行，不会出现任何终端窗口
 cargo build --release -p viewer --features admin
 
-# 分发版：没有任何 ssh 代码
-cargo build --release -p viewer --features windows_gui
+# 排障用：只有这一种组合会带终端窗口，因为 --routes-check / --selftest 要打印东西
+cargo build --release -p viewer --no-default-features --features admin
 ```
+
+**默认是 GUI**，所以想拿到终端窗口必须显式关掉默认特性——这样"顺手编一个给用户"
+不会意外编出带黑窗的版本。
 
 `nac.routes` 里给运营台那一行加 `ssh=用户@服务器`：
 

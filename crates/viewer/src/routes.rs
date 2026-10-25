@@ -42,17 +42,61 @@ pub struct Site {
     pub ssh: Option<String>,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct Routes {
     pub sites: Vec<Site>,
+    /// The display suffix users type, e.g. `nac.local` in `shop.nac.local`.
+    /// Arbitrary: it never reaches a real resolver, it only distinguishes a site
+    /// name from a path. Set it with an `@domain` line.
+    pub domain: String,
+}
+
+impl Default for Routes {
+    fn default() -> Self {
+        Self {
+            sites: Vec::new(),
+            domain: DEFAULT_DOMAIN.to_string(),
+        }
+    }
 }
 
 impl Routes {
+    /// The suffix to show and accept. Never empty.
+    pub fn domain(&self) -> &str {
+        if self.domain.is_empty() {
+            DEFAULT_DOMAIN
+        } else {
+            &self.domain
+        }
+    }
+
+    /// Lets a deployment rename the suffix without rebuilding: the operator's
+    /// `NAC_DOMAIN` wins over the file.
+    pub fn apply_env_domain(&mut self) {
+        if let Ok(value) = std::env::var("NAC_DOMAIN") {
+            let value = value.trim();
+            if !value.is_empty() {
+                self.domain = value.to_string();
+            }
+        }
+    }
+
     pub fn parse(text: &str) -> Self {
         let mut sites = Vec::new();
+        let mut domain = DEFAULT_DOMAIN.to_string();
         for line in text.lines() {
             let line = line.trim();
             if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            // `@domain example.test` — a plain `.local` name collides with
+            // mDNS on some networks, so deployments may want their own.
+            if let Some(rest) = line.strip_prefix('@') {
+                if let Some(value) = rest.split_whitespace().nth(1) {
+                    if looks_like_domain(value) {
+                        domain = value.to_ascii_lowercase();
+                    }
+                }
                 continue;
             }
             let (default, line) = match line.strip_prefix('*') {
@@ -99,7 +143,7 @@ impl Routes {
                 first.default = true;
             }
         }
-        Self { sites }
+        Self { sites, domain }
     }
 
     pub fn single(name: &str, endpoint: &str) -> Self {
@@ -111,6 +155,7 @@ impl Routes {
                 tls: TlsMode::Auto,
                 ssh: None,
             }],
+            domain: DEFAULT_DOMAIN.to_string(),
         }
     }
 
@@ -209,6 +254,18 @@ fn candidates(exe: Option<&Path>) -> Vec<PathBuf> {
     out.push(PathBuf::from(FILE_NAME));
     out.push(PathBuf::from(EXAMPLE_NAME));
     out
+}
+
+pub const DEFAULT_DOMAIN: &str = "nac.local";
+
+/// A suffix has to be something a person could plausibly type as a host: labels
+/// of letters, digits and dashes, separated by dots.
+fn looks_like_domain(text: &str) -> bool {
+    !text.is_empty()
+        && text.contains('.')
+        && text
+            .split('.')
+            .all(|label| !label.is_empty() && label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'))
 }
 
 fn with_default_port(endpoint: String) -> String {

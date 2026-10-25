@@ -82,8 +82,9 @@ fn main() -> eframe::Result<()> {
         return Ok(());
     }
 
-    let (routes, from_embedded) = build_routes(routes_path.as_deref(), addr);
-
+    let (mut routes, from_embedded) = build_routes(routes_path.as_deref(), addr);
+    routes.apply_env_domain();
+    tls::set_server_name(routes.domain());
     // A site marked `tls` cannot work without a pin, and the failure would
     // otherwise show up only as "cannot connect". Say it once, up front.
     if !plaintext && !tls::has_pin() {
@@ -339,10 +340,11 @@ fn stash_fields(
     }
 }
 
-/// Reads an address the way a browser does. Returns `(site, path)`.
+/// Reads an address the way a browser does.
 ///
-/// Accepted: `nac.local/`, `nac.local/about`, `about`, `/about`,
-/// `home.nac.local/about`, and the legacy `home/7` / `nac://home/7`.
+/// Accepted: `<domain>/`, `<domain>/about`, `about`, `/about`,
+/// `home.<domain>/about`, and the legacy `home/7` / `nac://home/7`. The suffix
+/// is `routes.domain()`, so a deployment can use a name of its own.
 /// Endpoints are not accepted here on purpose — they live in the routes file,
 /// so nothing the user types or sees has to contain one.
 /// A typed address, before anyone has checked that the site is reachable.
@@ -406,6 +408,13 @@ impl Trail {
     }
 }
 
+/// Reads an address the way a browser does.
+///
+/// Accepted: `<domain>/`, `<domain>/about`, `about`, `/about`,
+/// `home.<domain>/about`, and the legacy `home/7` / `nac://home/7`. The suffix
+/// comes from `routes.domain()` so a deployment may use its own.
+/// Endpoints are not accepted here on purpose — they live in the routes file,
+/// so nothing the user types or sees has to contain one.
 fn parse_address(input: &str, routes: &routes::Routes, current_site: &str) -> Option<Address> {
     let mut s = input.trim();
     if let Some((_, rest)) = s.split_once("://") {
@@ -436,7 +445,7 @@ fn parse_address(input: &str, routes: &routes::Routes, current_site: &str) -> Op
                 path,
             });
         }
-        if let Some(name) = unknown_origin(host) {
+        if let Some(name) = unknown_origin(host, routes.domain()) {
             return Some(Address::Unknown { site: name, path });
         }
         // A bare word is a path on the current site; anything host-shaped
@@ -456,10 +465,10 @@ fn parse_address(input: &str, routes: &routes::Routes, current_site: &str) -> Op
     })
 }
 
-/// `shop.nac.local` -> `Some("shop")`. Only single-label names count, so a typo
-/// like `a.b.nac.local` is still rejected instead of being looked up.
-fn unknown_origin(host: &str) -> Option<String> {
-    let suffix = format!(".{ORIGIN}");
+/// `shop.<domain>` -> `Some("shop")`. Only single-label names count, so a typo
+/// like `a.b.<domain>` is still rejected instead of being looked up.
+fn unknown_origin(host: &str, domain: &str) -> Option<String> {
+    let suffix = format!(".{}", domain.to_ascii_lowercase());
     let lowered = host.to_ascii_lowercase();
     let prefix = lowered.strip_suffix(&suffix)?;
     if prefix.is_empty()
@@ -474,13 +483,13 @@ fn unknown_origin(host: &str) -> Option<String> {
 }
 
 fn origin_site(host: &str, routes: &routes::Routes, current_site: &str) -> Option<String> {
-    if host.eq_ignore_ascii_case(ORIGIN) {
+    let domain = routes.domain();
+    if host.eq_ignore_ascii_case(domain) {
         return Some(current_site.to_string());
     }
-    let suffix = format!(".{ORIGIN}");
-    let prefix = host
-        .strip_suffix(&suffix)
-        .or_else(|| host.strip_suffix(&suffix.to_ascii_uppercase()))?;
+    let suffix = format!(".{}", domain.to_ascii_lowercase());
+    let lowered = host.to_ascii_lowercase();
+    let prefix = lowered.strip_suffix(&suffix)?;
     if prefix.is_empty() {
         return Some(current_site.to_string());
     }
@@ -529,7 +538,7 @@ fn resolve_path(entries: &[net::Entry], home: Option<u16>, path: &str) -> Option
     None
 }
 
-const ORIGIN: &str = "nac.local";
+
 
 #[derive(Clone, Debug, PartialEq)]
 enum Target {
@@ -641,10 +650,11 @@ impl Viewer {
 
     /// What the user sees: a page on a site, never an endpoint.
     fn host(&self) -> String {
+        let domain = self.routes.domain();
         if self.routes.sites.len() > 1 {
-            format!("{}.{}", self.site, ORIGIN)
+            format!("{}.{}", self.site, domain)
         } else {
-            ORIGIN.to_string()
+            domain.to_string()
         }
     }
 
@@ -1633,7 +1643,7 @@ impl eframe::App for Viewer {
                         .font(egui::TextStyle::Monospace)
                         .desired_width(width)
                         .desired_rows(1)
-                        .hint_text("nac.local/路径"),
+                        .hint_text(format!("{}/路径", self.routes.domain())),
                 );
                 if self.addr_focus {
                     resp.request_focus();
@@ -1927,6 +1937,40 @@ mod tests {
         // and the stack now holds `one` then `two`.
         assert_eq!(trail.go_back(Some(other)), Some(two));
         assert!(!trail.can_back());
+    }
+
+    #[test]
+    fn the_suffix_comes_from_the_file() {
+        // A deployment that does not want the default suffix says so once.
+        let r = routes::Routes::parse("@domain shop.example\n*home 127.0.0.1:7000\n");
+        assert_eq!(r.domain(), "shop.example");
+        assert_eq!(parse_address("shop.example/", &r, "home"), known("home", "/"));
+        assert_eq!(
+            parse_address("home.shop.example/about", &r, "home"),
+            known("home", "/about")
+        );
+        assert_eq!(
+            parse_address("notes.shop.example/", &r, "home"),
+            unknown("notes", "/")
+        );
+        // The old default is just a word now, not a site.
+        assert_eq!(parse_address("nac.local/", &r, "home"), None);
+    }
+
+    #[test]
+    fn without_a_directive_the_suffix_is_the_default() {
+        let r = routes::Routes::parse("*home 127.0.0.1:7000\n");
+        assert_eq!(r.domain(), routes::DEFAULT_DOMAIN);
+        assert_eq!(routes::Routes::default().domain(), routes::DEFAULT_DOMAIN);
+        assert_eq!(routes::Routes::single("dev", "1.2.3.4:1").domain(), routes::DEFAULT_DOMAIN);
+    }
+
+    #[test]
+    fn a_bad_domain_line_is_ignored() {
+        // No dot, so it cannot be mistaken for a host; keep the default instead.
+        let r = routes::Routes::parse("@domain naclocal\n*home 127.0.0.1:7000\n");
+        assert_eq!(r.domain(), routes::DEFAULT_DOMAIN);
+        assert_eq!(r.sites.len(), 1, "站点行不能被 @ 行吃掉");
     }
 
     #[test]

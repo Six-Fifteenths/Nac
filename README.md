@@ -49,7 +49,7 @@ console  MTI3LjAuMC4xOjcwMDE=       plain   # 运营台，走 SSH 隧道，回�
 | TLS（公开站） | 自签证书 + 客户端固定；管理端仍为回环明文。加密按站点声明（`nac.routes` 第三列 `tls` / `plain`），一个客户端可同时连两边 |
 | 发布 | 原子切换 `current`；路径路由、目录首页、静态页预渲染 |
 | 运维 | systemd 沙箱、分用户、资源上限、健康检查、每日备份 |
-| 客户端构建 | 分发版（`windows_gui`，无 ssh 能力）／管理员版（`admin`，可自动开 SSH 隧道，GUI 或控制台两种） |
+| 客户端构建 | 默认 GUI 无终端；分发版（不含 ssh 能力）／管理员版（`admin`，可自动开 SSH 隧道）；排障才用 `--no-default-features` 编出控制台版 |
 | 测试 | `cargo test --workspace` |
 
 ## 许可

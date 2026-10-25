@@ -1,7 +1,7 @@
 # nac 站点目录（示例）
 #
 # 复制成 nac.routes 再改。nac.routes 不进仓库，真正的端点只写在那里。
-# 用户只看到显示域名（nac.local）和路径，看不到也输不进主机地址。
+# 用户只看到显示域名和路径，看不到也输不进主机地址。
 #
 # 格式：[*]名字<空白>端点[<空白>标记...]
 #   端点    用 `viewer --routes-encode 主机:端口` 生成（base64，只是不显眼，不是加密）
@@ -11,11 +11,17 @@
 #     ssh=用户@服务器   只有 admin 构建才生效：客户端自己拉起 ssh -N -L 隧道
 #   带 * 的是默认站点，打开客户端就落在它上面。
 #
+# 另外可以写一行改掉显示用的后缀（默认 nac.local）：
+#   @domain shop.example
+# 它只影响显示和你输入的内容，不参与任何真实解析。
+#
 # 检查：  viewer --routes-check    （会列出 auto/tls/plain 与 ssh 标记）
 #
 # 注意：这不是加密。客户端要直连服务器就必须知道服务器在哪里，
 # 所以本文件只是让端点不显眼而已。真正的"看不到我的 IP"属于传输层，
 # 要等 Tor / 中继方案落地。
+
+# @domain shop.example
 
 *home   MTI3LjAuMC4xOjcwMDA=   plain
 

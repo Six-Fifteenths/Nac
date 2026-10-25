@@ -12,6 +12,10 @@ tls-client = { path = "../tls-client" }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 
 [features]
+# On by default: a viewer that opens a terminal window next to its own window is
+# a mistake, not a mode. Troubleshooting builds opt out with
+# `--no-default-features --features admin`.
+default = ["windows_gui"]
 windows_gui = []
 # Operator build: lets the viewer open an SSH tunnel for sites marked `ssh=`.
 # The distributed viewer is built without it, so no shell-spawning code ships.
