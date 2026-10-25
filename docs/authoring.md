@@ -123,6 +123,15 @@ with open(os.path.join("_data", "hn_seed.json"), encoding="utf-8") as fh:
 **页面的工作目录永远是 `scripts/`**，静态页和动态页一样。所以 `open("_data/x.json")`
 在两种页面里都指向同一个文件。
 
+**站点配置就放这里。** 几个页面要共用一份"名字、密码、文案、命令表"，写
+`_lib/config.py`，页面 `from _lib import config` 就行 —— 不需要新机制，也不用换成
+JSON：Python 模块本身就是一份能写注释、能计算的配置。`site-web.shell` 就是这么做
+的：`index.py` 只管跑命令，「说什么话」全在 `_lib/shell.py` 里，换一份那个文件
+就是另一个壳。
+
+有一条边界要记住：**发布层的东西**（页号、路径、标题、`# nac:static`、`# nac:match`）
+来自文件头的注释，发布时就要读，那时 Python 还没跑过 —— 所以它们没法进配置文件。
+
 不在 `_` 目录里的非 `.py` 文件（`notes.txt`、`data.json`）也会被当作素材复制过去，
 不会被静默丢掉。
 
@@ -264,6 +273,7 @@ with nac.warn("注意"):
 | `nac.img(path, width=None)` | 插图片；`path` 是 `site/` 里的相对路径 |
 | `nac.cap(text)` | 图片说明，小字灰字 |
 | `nac.figure(path, caption=None, width=None)` | 图片 + 说明 |
+| `nac.file(path, name=None)` | 附件：一行「文件名 · 大小 · 保存」，读者点了才取字节 |
 
 ### E2. 终端面板
 
@@ -543,7 +553,7 @@ with nac.cols(2):
 - 最多 4 列；列宽由客户端按可用宽度平分，两列高度不会自动对齐
 - 可以嵌套，里面还能放表格、提示框、页签
 
-## 6. 图片
+## 6. 图片与附件
 
 1. 把图片放进 `site/`（例如 `site/img/plan.png`），**直接放原始文件**
 2. 页面里 `nac.figure("img/plan.png", "一张图", 80)` 或 `nac.img("img/plan.png", 80)`
@@ -564,6 +574,20 @@ with nac.cols(2):
 4. 想保留带元数据的原图：`publish --archive <目录>`。归档目录不能放在 `site/` 里。
 
 已知取舍：EXIF 的 `Orientation` 会一起去掉，所以竖拍照片的旋转问题不因剥离而改变。
+
+### 附件（`_files/`）
+
+1. 把文件放进 `site/_files/`，**平铺，不要子目录**，每个 ≤ 2 MB
+2. 页面里 `nac.file("钥匙.zip")`（写 `_files/` 之后的那一段）
+3. 页面上出现一行「文件名 · 大小 · 保存」。读者点了客户端才去取字节，
+   取到直接写进系统下载目录：
+   - 文件名由客户端净化（路径分隔符、控制字符、`..`、`CON` 这类都削掉）
+   - 重名不覆盖，自动变成 `钥匙 (2).zip`；可以反复点
+   - 页面说不出路径，只能给名字
+4. 附件原件同时会复制进 `scripts/`，所以页面自己也能 `open("_files/钥匙.txt")` 读
+5. 发布时不修改内容，原样发送
+
+它和图片共用同一条二进制通道（`IMAGE` 帧，分块），所以协议没有为它加新东西。
 
 ## 7. 发布时的校验
 

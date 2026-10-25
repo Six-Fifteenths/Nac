@@ -3,6 +3,14 @@
 use crate::*;
 
 
+/// 附件保存到哪一步了。点一下之后才有的状态，所以默认不在表里。
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum SaveState {
+    Working,
+    Done(String),
+    Failed(String),
+}
+
 pub(crate) struct Tab {
     /// Stable across tab reordering, so per-tab widget state (scroll offset,
     /// texture names) survives closing another tab.
@@ -25,6 +33,8 @@ pub(crate) struct Tab {
     pub(crate) error: String,
     pub(crate) scroll_top: bool,
     pub(crate) loader: loader::Loader,
+    /// 附件 id → 保存进度。换页就清空：那是上一页的事了。
+    pub(crate) saved: HashMap<u16, SaveState>,
     /// Whether the address bar has the caret. A page must not steal focus from
     /// it, or keystrokes meant for the address vanish into a form field.
     pub(crate) address_focused: bool,

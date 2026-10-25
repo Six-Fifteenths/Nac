@@ -213,8 +213,21 @@
     }
 
     #[test]
-    fn a_bare_terminal_has_no_header_and_keeps_a_trailing_bracket() {
-        let src = "[[term bare||0]]\n[[line out|ends with ]] ]]\n[[end]]\n";
+    fn an_attachment_keeps_its_name_size_and_spaces() {
+        match only(&parse("!file 9|钥匙 (最终版).zip|2048\n")) {
+            Block::File { id, name, size } => {
+                assert_eq!(*id, 9);
+                assert_eq!(name, "钥匙 (最终版).zip");
+                assert_eq!(*size, 2048);
+            }
+            other => panic!("expected a file block, got {other:?}"),
+        }
+        // 名字缺了就是坏的标记，不画空按钮。
+        assert!(parse("!file 9||10\n").is_empty());
+    }
+
+    #[test]
+    fn a_bare_terminal_has_no_header_and_keeps_a_trailing_bracket() {        let src = "[[term bare||0]]\n[[line out|ends with ]] ]]\n[[end]]\n";
         match only(&parse(src)) {
             Block::Term(term) => {
                 assert!(term.bare);

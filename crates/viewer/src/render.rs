@@ -322,6 +322,7 @@ impl Tab {
                     ui.label(self.job(&parts, 13.0, muted, text.family()));
                     ui.add_space(8.0);
                 }
+                Block::File { id, name, size } => self.render_file(ui, id, &name, size),
                 Block::Table { header, rows } => {
                     self.render_table(ui, &header, &rows);
                 }
@@ -431,6 +432,42 @@ pub(crate) fn first_heading(blocks: &[Block]) -> Option<String> {
             Block::Tabs { bodies, .. } => {
                 for body in bodies {
                     if let Some(found) = first_heading(body) {
+                        return Some(found);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// The first attachment anywhere in the tree, outermost first — used by the
+/// self-test to walk the whole download path without a mouse.
+pub(crate) fn first_file(blocks: &[Block]) -> Option<(u16, String)> {
+    for block in blocks {
+        match block {
+            Block::File { id, name, .. } => return Some((*id, name.clone())),
+            Block::Box { children, .. } => {
+                if let Some(found) = first_file(children) {
+                    return Some(found);
+                }
+            }
+            Block::Columns(parts) => {
+                for part in parts {
+                    if let Some(found) = first_file(part) {
+                        return Some(found);
+                    }
+                }
+            }
+            Block::Note { body, .. } | Block::Details { body, .. } => {
+                if let Some(found) = first_file(body) {
+                    return Some(found);
+                }
+            }
+            Block::Tabs { bodies, .. } => {
+                for body in bodies {
+                    if let Some(found) = first_file(body) {
                         return Some(found);
                     }
                 }

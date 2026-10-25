@@ -1,6 +1,18 @@
-//! 媒体：图片、说明文字、头像、`[[scene]]` 动画、`[[term]]` 终端。
+//! 媒体：图片、说明文字、附件、头像、`[[scene]]` 动画、`[[term]]` 终端。
 
 use crate::*;
+
+/// `1024` → `1.0 KB`。附件的大小只用来看个大概，不追求精确。
+pub(crate) fn bytes_text(size: u32) -> String {
+    let n = size as f32;
+    if n >= 1024.0 * 1024.0 {
+        format!("{:.1} MB", n / (1024.0 * 1024.0))
+    } else if n >= 1024.0 {
+        format!("{:.0} KB", n / 1024.0)
+    } else {
+        format!("{size} B")
+    }
+}
 
 impl Tab {
     pub(crate) fn render_image(&mut self, ui: &mut egui::Ui, id: u16, pct: f32, ratio: Option<f32>) {
@@ -38,6 +50,48 @@ impl Tab {
             FontId::proportional(13.0),
             Color32::from_gray(150),
         );
+    }
+
+    /// `!file`：一行「文件名 · 大小 · 保存」。点了才去取字节，取到就直接落进
+    /// 系统下载目录 —— 页面说不出路径，也覆盖不掉已有文件。
+    pub(crate) fn render_file(&mut self, ui: &mut egui::Ui, id: u16, name: &str, size: u32) {
+        let state = self.saved.get(&id).cloned();
+        egui::Frame::new()
+            .fill(Color32::from_gray(247))
+            .stroke(egui::Stroke::new(1.0, Color32::from_gray(222)))
+            .corner_radius(egui::CornerRadius::same(4))
+            .inner_margin(egui::Margin::symmetric(12, 8))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(name).size(15.0).strong());
+                    ui.label(RichText::new(bytes_text(size)).size(13.0).weak());
+                    ui.add_space(8.0);
+                    // 按钮一直在：想再存一份就再点一次，第二份会自动叫「名字 (2)」。
+                    // 只有正在取的那一下没有按钮 —— 那时点了也只会排第二份，没意义。
+                    if matches!(state, Some(SaveState::Working)) {
+                        ui.label(RichText::new("保存中…").size(13.0).weak());
+                    } else if ui.button(RichText::new("保存").size(14.0)).clicked() {
+                        self.saved.insert(id, SaveState::Working);
+                        self.fetcher.save(id, name.to_string());
+                    }
+                    match &state {
+                        Some(SaveState::Done(path)) => {
+                            let short = save::safe_name(name);
+                            ui.label(RichText::new(format!("已存到 {short}")).size(13.0).weak())
+                                .on_hover_text(path);
+                        }
+                        Some(SaveState::Failed(why)) => {
+                            ui.label(
+                                RichText::new(format!("没存成：{why}"))
+                                    .size(13.0)
+                                    .color(Color32::from_rgb(170, 60, 60)),
+                            );
+                        }
+                        _ => {}
+                    }
+                });
+            });
+        ui.add_space(8.0);
     }
 
     /// Renders a run of inline content. When it contains links they become real

@@ -18,6 +18,9 @@ impl eframe::App for Viewer {
                     fetch::Msg::Resolved { name, found } => {
                         self.tabs[index].accept_resolved(&mut self.routes, name, found)
                     }
+                    fetch::Msg::Saved { id, result } => {
+                        self.tabs[index].accept_saved(id, result)
+                    }
                 }
             }
             for msg in self.tabs[index].loader.drain() {

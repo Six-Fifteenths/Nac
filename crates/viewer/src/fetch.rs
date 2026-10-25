@@ -23,6 +23,8 @@ pub enum Job {
     },
     /// Ask the server we are on where another site lives.
     Resolve(String),
+    /// 取一个附件并落盘。名字只是给人看的，落点由 `save::dir` 决定。
+    Save { id: u16, name: String },
 }
 
 pub enum Msg {
@@ -38,6 +40,11 @@ pub enum Msg {
     Resolved {
         name: String,
         found: Option<Found>,
+    },
+    /// 附件取回来了，落地成功就是路径，失败就是原因。
+    Saved {
+        id: u16,
+        result: Result<String, String>,
     },
 }
 
@@ -112,6 +119,13 @@ impl Fetcher {
                         let found = client.resolve(&name).ok();
                         Msg::Resolved { name, found }
                     }
+                    Job::Save { id, name } => {
+                        let result = match client.image(id) {
+                            Ok(bytes) => crate::save::write(&name, &bytes),
+                            Err(_) => Err("取不到这个文件".to_string()),
+                        };
+                        Msg::Saved { id, result }
+                    }
                 };
                 if msg_tx.send(msg).is_err() {
                     break;
@@ -146,6 +160,10 @@ impl Fetcher {
 
     pub fn resolve(&mut self, name: String) {
         self.send(Job::Resolve(name));
+    }
+
+    pub fn save(&mut self, id: u16, name: String) {
+        self.send(Job::Save { id, name });
     }
 
     pub fn drain(&mut self) -> Vec<Msg> {

@@ -17,6 +17,7 @@
 //! | `widgets` | 标签页方块、地址栏同步规则、终端配色 |
 //! | `state` | `Tab` / `Viewer` 两个结构体 |
 //! | `render` | 页面的排版与绘制 |
+//! | `save` | 附件落地到哪里、文件名怎么变干净 |
 //! | `app` | 窗口：标签栏、地址栏、状态栏、内容区 |
 
 use std::collections::HashMap;
@@ -37,6 +38,7 @@ mod markup;
 mod net;
 mod render;
 mod routes;
+mod save;
 mod state;
 mod style;
 mod tab;
@@ -51,7 +53,7 @@ use address::{
 };
 use fonts::{bold_of, fnv1a, install_fonts, BOX_PAD};
 use markup::{Block, Inline, LinkTarget, NoteKind};
-use state::{Tab, Viewer};
+use state::{SaveState, Tab, Viewer};
 use style::{Style, Text};
 use widgets::{
     should_sync_address, strip_line, tab_chip, unescape_lines, TabHit, TERM_ASCII, TERM_BG,

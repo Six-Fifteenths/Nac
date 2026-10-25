@@ -32,6 +32,7 @@ impl Tab {
             error: String::new(),
             scroll_top: true,
             loader: loader::Loader::new(endpoint, tls),
+            saved: HashMap::new(),
             address_focused: false,
             focus_input: false,
             saved_fields: HashMap::new(),
@@ -336,8 +337,7 @@ impl Tab {
         id: u16,
         text: Option<String>,
         reason: Option<protocol::EmptyReason>,
-    ) {
-        self.loading = false;
+    ) {        self.loading = false;
         match text {
             Some(text) => self.apply(id, &text),
             None => {
@@ -354,8 +354,19 @@ impl Tab {
         }
     }
 
+    /// 附件存好了（或者没存成）。只有点过「保存」的那一个 id 会变。
+    pub(crate) fn accept_saved(&mut self, id: u16, result: Result<String, String>) {
+        let state = match result {
+            Ok(path) => SaveState::Done(path),
+            Err(why) => SaveState::Failed(why),
+        };
+        self.saved.insert(id, state);
+    }
+
     pub(crate) fn apply(&mut self, id: u16, text: &str) {
         self.blocks = markup::parse(text);
+        // 上一页的附件进度不该跟着这一页走：id 是页内的，换了页就不作数了。
+        self.saved.clear();
         // 窗口标题 = 正文里第一个标题。必须往嵌套里找 —— 页面常常把整个正文包在
         // `[[box class=page]]` 里，只看顶层就一个标题都找不到（文章页曾经因此
         // 一律显示发布时的固定标题）。

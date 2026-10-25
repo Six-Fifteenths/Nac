@@ -5,8 +5,9 @@
 //!   * the page title comes from a `# nac:title <文字>` line
 //!   * scripts build markup with the generated `nac` helper module
 //!   * images live under `site/`; `nac.img("img/x.png", 60)` inserts one
+//!   * files under `site/_files/` are attachments: `nac.file("钥匙.zip")`
 //!
-//! The tool bakes the page/image tables into `nac.py`, checks that every
+//! The tool bakes the page/image/file tables into `nac.py`, checks that every
 //! script parses, and refuses to publish a broken generation.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -66,6 +67,9 @@ fn run(site: &Path, data: &Path, archive: Option<&Path>) -> Result<(), String> {
     let mut urls: BTreeSet<String> = BTreeSet::new();
     let mut used_ids: BTreeSet<u16> = BTreeSet::new();
     let mut images: Vec<(String, PathBuf)> = Vec::new();
+    // `_files/` 里的东西：既登记成附件（读者能存下来），也照样复制进 scripts/，
+    // 所以页面自己也能 open() 它。
+    let mut downloads: Vec<(String, String, u64)> = Vec::new();
     // Files the pages need at run time: modules to import, data to read, anything
     // that is not itself a page. Copied verbatim so a page can do what a normal
     // Python program does.
@@ -73,6 +77,13 @@ fn run(site: &Path, data: &Path, archive: Option<&Path>) -> Result<(), String> {
 
     for path in files {
         let rel = rel_string(site, &path);
+        if let Some(name) = download_name(&rel) {
+            check_attachment(name, &path, &rel)?;
+            let size = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+            downloads.push((rel.clone(), name.to_string(), size));
+            support.push((rel, path));
+            continue;
+        }
         let ext = path
             .extension()
             .and_then(|e| e.to_str())
@@ -196,6 +207,14 @@ fn run(site: &Path, data: &Path, archive: Option<&Path>) -> Result<(), String> {
         image_ids.insert(rel.clone(), id);
     }
 
+    // 附件接着图片的号往下排：两者共用一条二进制通道，编号不能撞。
+    downloads.sort_by(|a, b| a.1.cmp(&b.1));
+    let mut file_sizes: BTreeMap<String, (u16, u64)> = BTreeMap::new();
+    for (i, (_, name, size)) in downloads.iter().enumerate() {
+        let id = u16::try_from(images.len() + i + 1).map_err(|_| "too many files".to_string())?;
+        file_sizes.insert(name.clone(), (id, *size));
+    }
+
     let previous_gen = fs::read_to_string(data.join("current"))
         .ok()
         .map(|s| s.trim().to_string())
@@ -248,6 +267,7 @@ fn run(site: &Path, data: &Path, archive: Option<&Path>) -> Result<(), String> {
         .replace("@PATHS@", &path_map(&pages))
         .replace("@MATCHES@", &match_map(&pages))
         .replace("@IMAGES@", &image_map(&image_sizes))
+        .replace("@FILES@", &file_map(&file_sizes))
         .replace("@TITLES@", &title_map(&pages))
         .replace("@GEN@", &gen);
     fs::write(gen_dir.join("scripts").join("nac.py"), helper).map_err(|e| e.to_string())?;
@@ -305,6 +325,17 @@ fn run(site: &Path, data: &Path, archive: Option<&Path>) -> Result<(), String> {
         }
     }
 
+    for (rel, name, size) in &downloads {
+        // 附件和图片登记在同一张表里：那是"二进制素材"的登记表，服务端只按 id
+        // 取文件，不关心是图还是别的东西。这样**老服务端也能供附件**，不用跟着升级。
+        image_entries.push(serde_json::json!({
+            "id": file_sizes[name].0,
+            "file": format!("scripts/{rel}"),
+            "name": name,
+            "size": size,
+        }));
+    }
+
     let manifest = serde_json::json!({
         "gen": gen,
         "pages": page_entries,
@@ -319,10 +350,11 @@ fn run(site: &Path, data: &Path, archive: Option<&Path>) -> Result<(), String> {
     switch_current(&data, &gen)?;
 
     println!(
-        "published {} ({} pages, {} images)",
+        "published {} ({} pages, {} images, {} files)",
         gen,
         pages.len(),
-        image_entries.len()
+        image_entries.len() - downloads.len(),
+        downloads.len()
     );
     prune(data);
     Ok(())
@@ -333,6 +365,32 @@ fn run(site: &Path, data: &Path, archive: Option<&Path>) -> Result<(), String> {
 /// names that are internal.
 fn is_support(rel: &str) -> bool {
     rel.split('/').any(|part| part.starts_with('_'))
+}
+
+/// `_files/钥匙.zip` → `钥匙.zip`. 附件只收平铺的文件：名字要原样送到客户端，
+/// 带子目录既不好摆，也容易撞名。
+fn download_name(rel: &str) -> Option<&str> {
+    rel.strip_prefix("_files/")
+}
+
+/// 一个附件最多 2 MB。它是让读者整个存到本地的，不是用来传大文件的。
+const MAX_ATTACHMENT: u64 = 2 * 1024 * 1024;
+
+fn check_attachment(name: &str, path: &Path, rel: &str) -> Result<(), String> {
+    if name.contains('/') || name.contains('\\') {
+        return Err(format!("{rel}: 附件只能是 _files/ 下的单个文件，不要建子目录"));
+    }
+    if name.contains('|') || name.contains('\n') {
+        return Err(format!("{rel}: 文件名里不能有 | 或换行（它们会被当成标记的分隔符）"));
+    }
+    let size = fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+    if size > MAX_ATTACHMENT {
+        return Err(format!(
+            "{rel}: {} 字节，超过附件上限 {} 字节",
+            size, MAX_ATTACHMENT
+        ));
+    }
+    Ok(())
 }
 
 /// Reads `# nac:match /item/` — the prefix a dynamic page answers for.
@@ -552,6 +610,19 @@ fn image_map(images: &BTreeMap<String, (u16, u32, u32)>) -> String {
     out
 }
 
+/// 附件名 -> (id, 字节数)，写进 `nac.py` 的 `FILES`。
+fn file_map(files: &BTreeMap<String, (u16, u64)>) -> String {
+    let mut out = String::from("{");
+    for (i, (name, (id, size))) in files.iter().enumerate() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(&format!("{name:?}: ({id}, {size})"));
+    }
+    out.push('}');
+    out
+}
+
 /// Parses every page before publishing: a syntax error found here is one you
 /// do not find as an empty page later. Silently skipped when Python is absent.
 fn check_syntax(text: &str, rel: &str) -> Result<(), String> {
@@ -715,7 +786,8 @@ fn prune(data: &Path) {
 #[cfg(test)]
 mod tests {
     use super::{
-        allocate_page_id, is_support, normalize_page_path, page_match, page_url, switch_current,
+        allocate_page_id, check_attachment, download_name, is_support, normalize_page_path,
+        page_match, page_url, switch_current,
     };
     use std::collections::BTreeSet;
     use std::fs;
@@ -730,6 +802,17 @@ mod tests {
         assert!(is_support("_data/seed.json"));
         assert!(is_support("blog/_draft.py"));
         assert!(is_support("_notes.txt"));
+    }
+
+    #[test]
+    fn attachments_are_flat_files_under_underscore_files() {
+        assert_eq!(download_name("_files/钥匙.zip"), Some("钥匙.zip"));
+        assert_eq!(download_name("files/钥匙.zip"), None);
+        assert_eq!(download_name("_lib/x.py"), None);
+        let probe = Path::new("does-not-exist");
+        assert!(check_attachment("key.zip", probe, "_files/key.zip").is_ok());
+        assert!(check_attachment("a/b.zip", probe, "_files/a/b.zip").is_err());
+        assert!(check_attachment("a|b.zip", probe, "_files/a|b.zip").is_err());
     }
 
     #[test]

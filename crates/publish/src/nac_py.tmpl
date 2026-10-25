@@ -58,6 +58,9 @@ MATCHES = @MATCHES@
 #: 本代图片表：相对路径 -> (图片 id, 宽, 高)
 IMAGES = @IMAGES@
 
+#: 本代附件表：附件名 -> (附件 id, 字节数)
+FILES = @FILES@
+
 #: 页号 -> 标题
 TITLES = @TITLES@
 
@@ -318,6 +321,23 @@ def figure(path, caption=None, width=None):
     img(path, width)
     if caption:
         cap(caption)
+
+
+def file(path, name=None):
+    """附件：读者能把它整个存到自己电脑上的一份原样文件。
+
+    文件放在站点目录的 `_files/` 下，例如 `_files/钥匙.zip`；这里写
+    `nac.file("钥匙.zip")`。页面上只出现一行「文件名 · 大小 · 保存」，
+    点了会存进系统下载目录——重名不覆盖，自动加编号。
+    """
+    name = str(name or path)
+    if name not in FILES:
+        raise KeyError(
+            "没有这个附件：%s（这代里有：%s）"
+            % (name, ", ".join(sorted(FILES)) or "（空）")
+        )
+    ident, size = FILES[name]
+    _buf.append("!file %d|%s|%d" % (ident, name, size))
 
 
 # ----------------------------------------------------------------- F. 导航
@@ -992,7 +1012,7 @@ skin = _Group(
 
 media = _Group(
     "media",
-    img=img, cap=cap, figure=figure, avatar=avatar,
+    img=img, cap=cap, figure=figure, file=file, avatar=avatar,
     term=term, term_ascii=term_ascii, term_line=term_line, term_blank=term_blank,
     term_cursor=term_cursor, term_passwd=term_passwd,
 )

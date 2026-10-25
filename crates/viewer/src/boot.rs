@@ -301,11 +301,13 @@ pub(crate) fn selftest_run(routes: &routes::Routes, site_name: &str) -> eframe::
                     e.title
                 );
             }
+            let mut attachment: Option<(u16, String)> = None;
             if let Some(id) = entries.iter().map(|e| e.id).min() {
                 match client.page(id, "") {
                     Ok(text) => {
                         let blocks = markup::parse(&text);
                         println!("page {id}: {} bytes, {} blocks", text.len(), blocks.len());
+                        attachment = render::first_file(&blocks);
                         print!("{text}");
                     }
                     Err(_) => println!("page {id}: EMPTY"),
@@ -314,6 +316,20 @@ pub(crate) fn selftest_run(routes: &routes::Routes, site_name: &str) -> eframe::
             match client.image(1) {
                 Ok(bytes) => println!("image 1: {} bytes", bytes.len()),
                 Err(_) => println!("image 1: EMPTY"),
+            }
+            // 附件整条路：取字节、净化名字、写进一个临时目录。自检不该往
+            // 读者的下载目录里丢东西，所以落点是固定的。
+            if let Some((file_id, name)) = attachment {
+                match client.image(file_id) {
+                    Ok(bytes) => {
+                        let dir = std::env::temp_dir().join("nac-selftest");
+                        match save::write_to(&dir, &name, &bytes) {
+                            Ok(path) => println!("file {name}: {} bytes -> {path}", bytes.len()),
+                            Err(why) => println!("file {name}: {why}"),
+                        }
+                    }
+                    Err(_) => println!("file {name}: EMPTY"),
+                }
             }
             match client.submit(7, vec![("name".to_string(), "selftest".to_string())], "") {
                 Ok((id, text)) => println!("submit 7 -> page {id}: {} bytes", text.len()),

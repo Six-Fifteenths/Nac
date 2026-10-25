@@ -147,6 +147,13 @@ pub enum Block {
     },
     /// `!cap 文字` — small muted line under a figure.
     Caption(Vec<Inline>),
+    /// `!file 7|钥匙.zip|1024` — an attachment: name, size, and a save button.
+    /// Nothing of it is drawn; the reader chooses whether to take it.
+    File {
+        id: u16,
+        name: String,
+        size: u32,
+    },
     Link {
         target: LinkTarget,
         text: String,
@@ -398,6 +405,21 @@ fn parse_one(lines: &[&str], i: &mut usize) -> Option<Block> {
         return Some(Block::Caption(inlines(rest)));
     }
 
+    // `!file 7|钥匙.zip|1024` —— 附件。`|` 分隔，因为文件名里可以有空格。
+    if let Some(rest) = t.strip_prefix("!file ") {
+        *i += 1;
+        let mut parts = rest.splitn(3, '|');
+        let id = parts.next().and_then(|v| v.trim().parse::<u16>().ok());
+        let name = parts.next().unwrap_or("").trim().to_string();
+        let size = parts
+            .next()
+            .and_then(|v| v.trim().parse::<u32>().ok())
+            .unwrap_or(0);
+        return match id {
+            Some(id) if !name.is_empty() => Some(Block::File { id, name, size }),
+            _ => None,
+        };
+    }
     if let Some(rest) = t.strip_prefix("[[cols ") {
         return parse_columns(lines, i, inner_spec(rest));
     }
@@ -1022,6 +1044,7 @@ fn starts_block(line: &str) -> bool {
         || line.starts_with('|')
         || line.starts_with("!img ")
         || line.starts_with("!cap ")
+        || line.starts_with("!file ")
         || line.starts_with("[[")
         || heading(line).is_some()
 }

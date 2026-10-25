@@ -6,48 +6,15 @@
 原版：https://github.com/nasan016/webshell （MIT，作者 nasan016）。
 这里是重写而不是移植：原版是 TypeScript + CSS，这里是一个 Python 页面。
 配色、排版、命令、彩蛋都照原版做；做不到的地方写在页面末尾。
+
+这一页只管"怎么跑"：命令怎么分派、状态怎么存、终端怎么画。壳里说的话——名字、
+密码、横幅、帮助、项目、诗句——全在 `_lib/shell.py`。换一份那个文件，就是另一个壳。
 """
 
 import random
 
 import nac
-
-USER = "visitor"
-HOST = "webshell"
-PASSWORD = "050823"
-REPO = "https://github.com/nasan016/webshell"
-
-ART = [
-    "███████╗██╗  ██╗███████╗██╗     ██╗",
-    "██╔════╝██║  ██║██╔════╝██║     ██║",
-    "███████╗███████║█████╗  ██║     ██║",
-    "╚════██║██╔══██║██╔══╝  ██║     ██║",
-    "███████║██║  ██║███████╗███████╗███████╗",
-    "╚══════╝╚═╝  ╚═╝╚══════╝╚══════╝╚══════╝",
-]
-
-WHOAMI = [
-    ["In the kaleidoscope of existence,", "I am but a reflection questioning the enigma - "],
-    ["Amidst cosmic whispers,", "I navigate the maze of self-discovery,", "echoing the eternal refrain - "],
-    ["In the symphony of life,", "I am a note inquiring its own melody,", "harmonizing with the universal query - "],
-    ["As stardust contemplating its journey,", "I ponder the cosmic query,", "silently asking - "],
-    ["In the tapestry of reality,", "I am the thread of self-inquiry,", "weaving through the eternal question - "],
-]
-
-HELP = [
-    ("'about'", "Who made this website?"),
-    ("'projects'", "Maybe there's something interesting."),
-    ("'whoami'", "A perplexing question."),
-    ("'sudo'", "???"),
-    ("'repo'", "View the Github Repository."),
-    ("'banner'", "Display the banner."),
-    ("'clear'", "Clear the terminal."),
-]
-
-PROJECTS = [
-    ("GofeR", "Vue.js reactivity in Go.", "https://github.com/nasan016/gofer"),
-    ("WebShell", "Terminal styled website.", REPO),
-]
+from _lib import shell
 
 
 # --------------------------------------------------------------- 输出小工具
@@ -63,15 +30,11 @@ def blank():
 
 def banner_lines():
     lines = [blank()]
-    for row in ART:
+    for row in shell.ART:
         lines.append([("ascii", row)])
-    lines += [
-        blank(),
-        out("Welcome to WebShell v1.0.0"),
-        [("out", "Type "), ("cmd", "'help'"), ("out", " for a list of all available commands.")],
-        [("out", "Type "), ("cmd", "'repo'"), ("out", " to view the GitHub repository.")],
-        blank(),
-    ]
+    lines.append(blank())
+    lines += shell.WELCOME
+    lines.append(blank())
     return lines
 
 
@@ -84,7 +47,7 @@ def pad(name, width=15):
 
 def run_help():
     lines = [blank()]
-    for name, what in HELP:
+    for name, what in shell.HELP:
         lines.append([("out", "  "), ("cmd", name), ("out", pad(name) + what)])
     lines += [
         blank(),
@@ -100,7 +63,7 @@ def run_about():
         [blank(), out("Hi stranger. Welcome to WebShell."), blank()]
         + [
             [("out", "  Github   "), ("link", "https://github.com/nasan016")],
-            [("out", "  Project  "), ("link", REPO)],
+            [("out", "  Project  "), ("link", shell.REPO)],
         ]
         + [blank()]
     )
@@ -108,14 +71,14 @@ def run_about():
 
 def run_projects():
     lines = [blank()]
-    for name, what, url in PROJECTS:
+    for name, what, url in shell.PROJECTS:
         lines.append([("link", url), ("out", pad(name) + what)])
-    lines += [blank(), out("%d File(s)" % len(PROJECTS)), blank()]
+    lines += [blank(), out("%d File(s)" % len(shell.PROJECTS)), blank()]
     return lines
 
 
 def run_whoami():
-    poem = random.choice(WHOAMI)
+    poem = random.choice(shell.WHOAMI)
     lines = [blank()]
     for index, row in enumerate(poem):
         if index == len(poem) - 1:
@@ -168,7 +131,7 @@ def dispatch(command, state):
             else run_help()
         ), None
     if command == "whoami":
-        return ([blank(), out(USER), blank()] if state["bare"] else run_whoami()), None
+        return ([blank(), out(shell.USER), blank()] if state["bare"] else run_whoami()), None
     if command == "about":
         return ([blank(), out("Nothing to see here."), blank()] if state["bare"] else run_about()), None
     if command == "projects":
@@ -178,7 +141,7 @@ def dispatch(command, state):
             else run_projects()
         ), None
     if command == "repo":
-        return [blank(), out("Redirecting to github.com..."), blank(), [("link", REPO)]], None
+        return [blank(), out("Redirecting to github.com..."), blank(), [("link", shell.REPO)]], None
     if command == "sudo":
         if state["bare"]:
             return [blank(), out("no."), blank()], None
@@ -225,7 +188,7 @@ def handle_submit(state):
     if state["waiting"]:
         typed = nac.field_of("pw")
         state["waiting"] = False
-        if typed == PASSWORD:
+        if typed == shell.PASSWORD:
             state["sudo"] = True
             state["tries"] = 0
             push(state, "", [blank(), out("PERMISSION GRANTED."), [("out", "Try "), ("cmd", "'rm -rf'")], blank()])
@@ -255,12 +218,7 @@ def handle_submit(state):
 
 
 def prompt_line(*tail):
-    return (
-        ("pu", USER),
-        ("pd", "@"),
-        ("ph", HOST),
-        ("pd", ":$ ~ "),
-    ) + tuple(tail)
+    return tuple(shell.PROMPT) + tuple(tail)
 
 
 def emit(line):
@@ -290,7 +248,7 @@ if nac.submitted():
 
 state = state_of()
 
-with nac.term("WebShell.x64_x86", target=nac.page_id(), bare=state["bare"]):
+with nac.term(shell.TITLE, target=nac.page_id(), bare=state["bare"]):
     for record in state["records"]:
         if record["cmd"]:
             nac.term_line(*prompt_line(("in", record["cmd"])))
