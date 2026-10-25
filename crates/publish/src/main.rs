@@ -488,6 +488,11 @@ fn page_title(text: &str) -> Option<String> {
 
 fn page_list(pages: &BTreeMap<u16, PageSource>) -> String {
     let ids: Vec<String> = pages.keys().map(|id| id.to_string()).collect();
+    // A single page must still be a one-element tuple: `(65206)` is an int, and
+    // `page not in PAGES` then raises instead of answering.
+    if ids.len() == 1 {
+        return format!("({},)", ids[0]);
+    }
     format!("({})", ids.join(", "))
 }
 

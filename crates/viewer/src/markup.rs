@@ -44,6 +44,68 @@ pub enum NoteKind {
     Danger,
 }
 
+/// Colour role of one run of text inside a `[[term]]`.
+///
+/// The codes are short because pages generate them: `pu` user, `ph` host,
+/// `pd` prompt default, `out` plain output, `cmd` a command name, `link` an
+/// address, `keys` a key hint, `in` what the reader typed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TermRole {
+    User,
+    Host,
+    Prompt,
+    Out,
+    Cmd,
+    Link,
+    Keys,
+    Input,
+}
+
+impl TermRole {
+    fn parse(code: &str) -> Self {
+        match code {
+            "pu" => Self::User,
+            "ph" => Self::Host,
+            "pd" => Self::Prompt,
+            "cmd" => Self::Cmd,
+            "link" => Self::Link,
+            "keys" => Self::Keys,
+            "in" => Self::Input,
+            _ => Self::Out,
+        }
+    }
+}
+
+/// One line of a `[[term]]` panel.
+#[derive(Clone, Debug, PartialEq)]
+pub enum TermLine {
+    /// Banner art: monospace, fixed leading, no spanning.
+    Ascii(String),
+    /// Coloured runs, concatenated without spacing.
+    Text(Vec<(TermRole, String)>),
+    /// Coloured runs, then a text field. `secret` draws dots instead of glyphs.
+    Field {
+        name: String,
+        secret: bool,
+        lead: Vec<(TermRole, String)>,
+    },
+}
+
+/// A dark terminal panel: `[[term panel|标题|页号]]` … `[[end]]`.
+///
+/// `target` makes the panel's own text field submit to that page, so the input
+/// line can sit *inside* the frame instead of below it — which is the whole
+/// point of a terminal.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Term {
+    pub title: String,
+    pub target: Option<u16>,
+    /// Without the header bars, the panel is the "everything is ruined" look:
+    /// plain black, no title, no bars.
+    pub bare: bool,
+    pub lines: Vec<TermLine>,
+}
+
 impl NoteKind {
     fn parse(text: &str) -> Option<Self> {
         Some(match text.trim() {
@@ -145,6 +207,8 @@ pub enum Block {
         titles: Vec<String>,
         bodies: Vec<Vec<Block>>,
     },
+    /// `[[term panel|标题|页号]] … [[end]]`
+    Term(Term),
 }
 
 pub fn parse(text: &str) -> Vec<Block> {
@@ -308,6 +372,10 @@ fn parse_one(lines: &[&str], i: &mut usize) -> Option<Block> {
 
     if let Some(rest) = t.strip_prefix("[[scene") {
         return parse_scene(lines, i, inner_spec(rest));
+    }
+
+    if let Some(rest) = t.strip_prefix("[[term") {
+        return parse_term(lines, i, inner_spec(rest));
     }
 
     if let Some(rest) = t.strip_prefix("[[code") {
@@ -529,6 +597,102 @@ fn parse_tabs(lines: &[&str], i: &mut usize, spec: &str) -> Option<Block> {
         }
     }
     Some(Block::Tabs { titles, bodies })
+}
+
+/// `[[term 版式|标题|页号]]`, then one directive per line, then `[[end]]`.
+///
+/// Line directives:
+///   `[[ascii 文字]]`      banner art — monospace, fixed leading
+///   `[[line r|文字|r|文字]]`  runs of coloured text
+///   `[[cursor 名|r|文字]]`    runs of coloured text, then a text field
+///   `[[passwd 名|r|文字]]`    same, but the field hides what is typed
+///
+/// `|` is the separator, so pages replace any literal `|` before emitting.
+fn parse_term(lines: &[&str], i: &mut usize, spec: &str) -> Option<Block> {
+    let mut parts = spec.split('|').map(str::trim);
+    let flavor = parts.next().unwrap_or("");
+    let title = parts.next().unwrap_or("").to_string();
+    let target = parts
+        .next()
+        .and_then(|v| v.parse::<u16>().ok())
+        .filter(|v| *v != 0);
+    if flavor != "panel" && flavor != "bare" {
+        return None;
+    }
+    let bare = flavor == "bare";
+
+    *i += 1;
+    let mut out = Vec::new();
+    while *i < lines.len() {
+        let head = lines[*i].trim();
+        *i += 1;
+        if head == "[[end]]" {
+            break;
+        }
+        if head.is_empty() {
+            out.push(TermLine::Text(Vec::new()));
+            continue;
+        }
+        if let Some(rest) = head.strip_prefix("[[ascii ") {
+            out.push(TermLine::Ascii(
+                rest.trim_end_matches(']').trim_end().to_string(),
+            ));
+            continue;
+        }
+        if let Some(rest) = head.strip_prefix("[[line ") {
+            out.push(TermLine::Text(term_runs(unclose(rest))));
+            continue;
+        }
+        let field = head
+            .strip_prefix("[[cursor ")
+            .map(|rest| (rest, false))
+            .or_else(|| head.strip_prefix("[[passwd ").map(|rest| (rest, true)));
+        if let Some((rest, secret)) = field {
+            let rest = unclose(rest).trim_end();
+            let (name, tail) = rest.split_once('|').unwrap_or((rest, ""));
+            out.push(TermLine::Field {
+                name: name.trim().to_string(),
+                secret,
+                lead: term_runs(tail),
+            });
+            continue;
+        }
+        // Unknown directive inside a panel: keep it as plain text rather than
+        // dropping it, so a typo shows up instead of silently vanishing.
+        out.push(TermLine::Text(vec![(TermRole::Out, head.to_string())]));
+    }
+
+    Some(Block::Term(Term {
+        title,
+        target,
+        bare,
+        lines: out,
+    }))
+}
+
+/// Drops the closing `]]` only, so text that legitimately ends in `]` survives.
+fn unclose(text: &str) -> &str {
+    text.strip_suffix("]]").unwrap_or(text)
+}
+
+/// `r|文字|r|文字` → pairs. A trailing orphan run is treated as plain output.
+fn term_runs(text: &str) -> Vec<(TermRole, String)> {
+    let parts: Vec<&str> = text.split('|').collect();
+    let mut out = Vec::new();
+    let mut index = 0;
+    while index < parts.len() {
+        if index + 1 < parts.len() {
+            out.push((
+                TermRole::parse(parts[index].trim()),
+                parts[index + 1].to_string(),
+            ));
+            index += 2;
+        } else {
+            out.push((TermRole::Out, parts[index].to_string()));
+            index += 1;
+        }
+    }
+    out
 }
 
 /// Reads raw lines up to and including `[[end]]`. Used where the body is not
@@ -913,6 +1077,63 @@ mod tests {
         ));
         let hostile = inlines("[[url:file:///etc/passwd|偷看]]");
         assert!(hostile.iter().all(|p| !matches!(p, Inline::Link { .. })));
+    }
+
+    #[test]
+    fn a_terminal_panel_keeps_its_runs_in_order() {
+        let src = "[[term panel|WebShell.x64_x86|65206]]\n\
+                   [[ascii ███╗]]\n\
+                   [[line pu|visitor|pd|@|ph|host|pd|:$ ~ |in|help]]\n\
+                   \n\
+                   [[cursor cmd|pd|> ]]\n\
+                   [[passwd pw|out|Password: ]]\n\
+                   [[end]]\n";
+        match only(&parse(src)) {
+            Block::Term(term) => {
+                assert_eq!(term.title, "WebShell.x64_x86");
+                assert_eq!(term.target, Some(65206));
+                assert!(!term.bare);
+                assert_eq!(term.lines.len(), 5);
+                assert!(matches!(&term.lines[0], TermLine::Ascii(a) if a == "███╗"));
+                match &term.lines[1] {
+                    TermLine::Text(runs) => {
+                        assert_eq!(runs.len(), 5);
+                        assert_eq!(runs[0], (TermRole::User, "visitor".to_string()));
+                        assert_eq!(runs[3], (TermRole::Prompt, ":$ ~ ".to_string()));
+                        assert_eq!(runs[4], (TermRole::Input, "help".to_string()));
+                    }
+                    other => panic!("expected runs, got {other:?}"),
+                }
+                assert!(matches!(&term.lines[2], TermLine::Text(r) if r.is_empty()));
+                assert!(matches!(
+                    &term.lines[3],
+                    TermLine::Field { name, secret, .. } if name == "cmd" && !secret
+                ));
+                assert!(matches!(
+                    &term.lines[4],
+                    TermLine::Field { name, secret, .. } if name == "pw" && *secret
+                ));
+            }
+            other => panic!("expected a term block, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_bare_terminal_has_no_header_and_keeps_a_trailing_bracket() {
+        let src = "[[term bare||0]]\n[[line out|ends with ]] ]]\n[[end]]\n";
+        match only(&parse(src)) {
+            Block::Term(term) => {
+                assert!(term.bare);
+                assert_eq!(term.target, None);
+                match &term.lines[0] {
+                    TermLine::Text(runs) => {
+                        assert_eq!(runs[0].1.trim_end(), "ends with ]]");
+                    }
+                    other => panic!("expected runs, got {other:?}"),
+                }
+            }
+            other => panic!("expected a term block, got {other:?}"),
+        }
     }
 
     #[test]

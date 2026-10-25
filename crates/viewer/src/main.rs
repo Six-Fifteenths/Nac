@@ -182,6 +182,21 @@ fn should_sync_address(
     shown != want && !holding && (!focused || !edited)
 }
 
+/// Palette of a `[[term]]` panel. These are the WebShell defaults, so a page can
+/// reproduce that look without the client knowing what a "terminal site" is.
+const TERM_BG: Color32 = Color32::from_rgb(0x0C, 0x06, 0x23);
+const TERM_FG: Color32 = Color32::from_rgb(0xF8, 0xDD, 0xE5);
+const TERM_BORDER: Color32 = Color32::from_rgb(0xFF, 0xAD, 0xE2);
+const TERM_ASCII: Color32 = Color32::from_rgb(0xFF, 0x99, 0x51);
+const TERM_USER: Color32 = Color32::from_rgb(0xFE, 0x6B, 0xC9);
+const TERM_HOST: Color32 = Color32::from_rgb(0x70, 0xFD, 0xFF);
+const TERM_PROMPT: Color32 = Color32::from_rgb(0xA5, 0xA7, 0xA7);
+const TERM_CMD: Color32 = Color32::from_rgb(0xFD, 0x9B, 0xDB);
+const TERM_LINK: Color32 = Color32::from_rgb(0xB6, 0xAA, 0xEE);
+const TERM_INPUT: Color32 = Color32::from_rgb(0xFF, 0x76, 0x85);
+/// One terminal line. The original CSS says 22px at 16px text.
+const TERM_LINE: f32 = 22.0;
+
 /// Caps a title so a narrow window still fits a few tabs. Counts characters, not
 /// bytes, so a Chinese title is cut at a sensible place.
 fn shorten(text: &str, limit: usize) -> String {
@@ -1651,6 +1666,181 @@ impl Tab {
         }
     }
 
+    fn render_term(&mut self, ui: &mut egui::Ui, term: &markup::Term) {
+        let bg = if term.bare { Color32::BLACK } else { TERM_BG };
+        let body = if term.bare { Color32::WHITE } else { TERM_FG };
+        let width = ui.available_width().max(280.0);
+        if let Some(target) = term.target {
+            self.form_target = Some(target);
+        }
+
+        let border = if term.bare {
+            egui::Stroke::NONE
+        } else {
+            egui::Stroke::new(2.0, TERM_BORDER)
+        };
+        egui::Frame::new()
+            .fill(bg)
+            .stroke(border)
+            .corner_radius(egui::CornerRadius::same(3))
+            .show(ui, |ui| {
+                ui.set_width(width - 4.0);
+                ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
+
+                if !term.bare {
+                    let bar_w = ui.available_width();
+                    let (title_rect, _) =
+                        ui.allocate_exact_size(egui::vec2(bar_w, 30.0), egui::Sense::hover());
+                    ui.painter().rect_filled(title_rect, 0, TERM_BORDER);
+                    ui.painter().text(
+                        egui::pos2(title_rect.left() + 10.0, title_rect.center().y),
+                        egui::Align2::LEFT_CENTER,
+                        &term.title,
+                        egui::FontId::proportional(17.0),
+                        TERM_BG,
+                    );
+                    // Four hairlines under the title, each one pixel thinner than
+                    // the last — the same taper the original uses.
+                    for (height, gap) in [(4.0, 1.0), (3.0, 2.0), (2.0, 3.0), (1.0, 4.0)] {
+                        ui.add_space(gap);
+                        let (rect, _) = ui.allocate_exact_size(
+                            egui::vec2(bar_w, height),
+                            egui::Sense::hover(),
+                        );
+                        ui.painter().rect_filled(rect, 0, TERM_BORDER);
+                    }
+                }
+
+                ui.add_space(10.0);
+                // Left inset matches the original's `#terminal { margin-left: 20px }`.
+                egui::Frame::new()
+                    .inner_margin(egui::Margin {
+                        left: 16,
+                        right: 8,
+                        top: 0,
+                        bottom: 10,
+                    })
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
+                        for line in &term.lines {
+                            match line {
+                                markup::TermLine::Ascii(text) => {
+                                    ui.add(
+                                        egui::Label::new(
+                                            egui::RichText::new(text)
+                                                .font(egui::FontId::monospace(14.0))
+                                                .line_height(Some(16.0))
+                                                .color(if term.bare {
+                                                    Color32::WHITE
+                                                } else {
+                                                    TERM_ASCII
+                                                }),
+                                        )
+                                        .wrap_mode(egui::TextWrapMode::Extend),
+                                    );
+                                }
+                                markup::TermLine::Text(runs) => {
+                                    let blank = runs.is_empty()
+                                        || (runs.len() == 1 && runs[0].1.is_empty());
+                                    if blank {
+                                        ui.add_space(TERM_LINE);
+                                        continue;
+                                    }
+                                    ui.horizontal(|ui| {
+                                        ui.spacing_mut().item_spacing.x = 0.0;
+                                        for (role, text) in runs {
+                                            self.term_run(ui, *role, text, body);
+                                        }
+                                    });
+                                }
+                                markup::TermLine::Field {
+                                    name,
+                                    secret,
+                                    lead,
+                                } => {
+                                    ui.horizontal(|ui| {
+                                        ui.spacing_mut().item_spacing.x = 0.0;
+                                        for (role, text) in lead {
+                                            self.term_run(ui, *role, text, body);
+                                        }
+                                        let mut value =
+                                            self.fields.get(name).cloned().unwrap_or_default();
+                                        let ink = if term.bare {
+                                            Color32::WHITE
+                                        } else {
+                                            TERM_INPUT
+                                        };
+                                        let room = (ui.available_width() - 8.0).max(120.0);
+                                        let mut edit = egui::TextEdit::singleline(&mut value)
+                                            .font(egui::TextStyle::Monospace)
+                                            .text_color(ink)
+                                            .desired_width(room)
+                                            .frame(egui::Frame::new())
+                                            .margin(egui::Margin::symmetric(0, 0));
+                                        if *secret {
+                                            edit = edit.password(true);
+                                        }
+                                        ui.visuals_mut().text_cursor.stroke.color = ink;
+                                        let resp = ui.add(edit);
+                                        if resp.changed() {
+                                            self.fields.insert(name.clone(), value.clone());
+                                        }
+                                        if self.focus_input && !self.address_focused {
+                                            resp.request_focus();
+                                            self.focus_input = false;
+                                        }
+                                        if resp.lost_focus()
+                                            && ui.input(|i| i.key_pressed(egui::Key::Enter))
+                                        {
+                                            self.submit();
+                                        }
+                                    });
+                                }
+                            }
+                        }
+                    });
+            });
+    }
+
+    /// One coloured run inside a `[[term]]`. A run whose text is a URL behaves
+    /// like a link, because a terminal that prints an address should be able to
+    /// open it.
+    fn term_run(&mut self, ui: &mut egui::Ui, role: markup::TermRole, text: &str, body: Color32) {
+        use markup::TermRole;
+        let color = match role {
+            TermRole::User => TERM_USER,
+            TermRole::Host => TERM_HOST,
+            TermRole::Prompt => TERM_PROMPT,
+            TermRole::Cmd => TERM_CMD,
+            TermRole::Link => TERM_LINK,
+            TermRole::Keys => TERM_ASCII,
+            TermRole::Input => TERM_INPUT,
+            TermRole::Out => body,
+        };
+        let rich = egui::RichText::new(text)
+            .font(egui::FontId::monospace(15.0))
+            .line_height(Some(TERM_LINE))
+            .color(color);
+        let clickable = matches!(role, TermRole::Link)
+            && (text.starts_with("http://") || text.starts_with("https://"));
+        if clickable {
+            let resp = ui.add(
+                egui::Label::new(rich.underline())
+                    .wrap_mode(egui::TextWrapMode::Extend)
+                    .sense(egui::Sense::click()),
+            );
+            if resp.hovered() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            }
+            if resp.clicked() {
+                open_in_browser(text);
+            }
+        } else {
+            ui.add(egui::Label::new(rich).wrap_mode(egui::TextWrapMode::Extend));
+        }
+    }
+
     fn render_table(
         &mut self,
         ui: &mut egui::Ui,
@@ -1889,6 +2079,13 @@ impl Tab {
                     bars,
                 } => {
                     self.render_scene(ui, width, height, seconds, &bars);
+                }
+                Block::Term(term) => {
+                    if term.target.is_some() {
+                        saw_input = true;
+                    }
+                    self.render_term(ui, &term);
+                    ui.add_space(10.0);
                 }
                 Block::Button { label } => {
                     if ui

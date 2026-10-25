@@ -807,6 +807,85 @@ def pages():
     return [(page, url(page), title_of(page)) for page in PAGES]
 
 
+# ---------------------------------------------------------------- L. 终端
+
+#: 终端面板里一段文字的角色代码。生成页面时用这些名字，别直接写两字母码。
+TERM = {
+    "user": "pu",
+    "host": "ph",
+    "prompt": "pd",
+    "out": "out",
+    "cmd": "cmd",
+    "link": "link",
+    "keys": "keys",
+    "in": "in",
+}
+
+
+def _term_runs(pairs):
+    """角色与文字交替给，或者给成 (角色, 文字) 的元组，两种都收。"""
+    flat = []
+    for item in pairs:
+        if isinstance(item, (tuple, list)):
+            flat.extend(item)
+        else:
+            flat.append(item)
+    out = []
+    for index in range(0, len(flat), 2):
+        role = str(flat[index])
+        text = _cell(flat[index + 1] if index + 1 < len(flat) else "")
+        out.append("%s|%s" % (TERM.get(role, role), text))
+    return "|".join(out)
+
+
+@contextmanager
+def term(title="", target=0, bare=False):
+    """一块深色终端面板。
+
+        with nac.term("WebShell.x64_x86", target=nac.page_id()):
+            nac.term_ascii(ART)
+            nac.term_line("user", "visitor", "prompt", "@", "host", "webshell")
+            nac.term_cursor("cmd", "prompt", ":$ ~ ")
+
+    `target` 给页号时，面板里的输入框按回车就提交到那一页 —— 输入行因此能待在
+    边框里面，而不是掉到下面去。`bare=True` 去掉标题栏，整块变成纯黑底白字。
+    """
+    flavor = "bare" if bare else "panel"
+    with _section("[[term %s|%s|%d]]" % (flavor, _cell(title), int(target or 0))):
+        yield
+
+
+def term_ascii(lines):
+    """横幅美术字：等宽、固定行距、不折行。可以给一行，也可以给一串。"""
+    if isinstance(lines, str):
+        lines = lines.split("\n")
+    for line in lines:
+        _buf.append("[[ascii %s]]" % _cell(line))
+
+
+def term_line(*pairs):
+    """一行彩色文字：角色与文字交替给。
+
+        nac.term_line("cmd", "help", "out", "    列出所有命令")
+    """
+    _buf.append("[[line %s]]" % _term_runs(pairs))
+
+
+def term_blank():
+    """终端里空一行。"""
+    _buf.append("")
+
+
+def term_cursor(name, *pairs):
+    """彩色前缀 + 一个输入框。name 是取值的字段名。"""
+    _buf.append("[[cursor %s|%s]]" % (_cell(name), _term_runs(pairs)))
+
+
+def term_passwd(name, *pairs):
+    """同 term_cursor，但输入的内容显示成点。"""
+    _buf.append("[[passwd %s|%s]]" % (_cell(name), _term_runs(pairs)))
+
+
 # ----------------------------------------------------------------- K. 输出
 
 def done():
