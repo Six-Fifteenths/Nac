@@ -14,7 +14,7 @@ ExecStart=/srv/nac/bin/contentd \
     --data /srv/nac/data \
     --port 7000 \
     --bind 127.0.0.1 \
-    --name home \
+    --name nac.local \
     --registry /srv/nac/sites.json \
     --tls-cert /etc/ssl/nac/public.crt \
     --tls-key /etc/ssl/nac/public.key \
