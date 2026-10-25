@@ -487,10 +487,41 @@ fn selftest_run(routes: &routes::Routes, site_name: &str) -> eframe::Result<()> 
 
 // ------------------------------------------------------------------- fonts
 
+/// Fonts shipped inside the binary.
+///
+/// The system font is whatever Windows or Linux happens to have, which means the
+/// same page looks different on every machine and never matches a reference
+/// screenshot. These are bundled instead, and both are OFL so they can travel
+/// with the binary (see assets/fonts/OFL-*.txt).
+const FONT_SANS: &[u8] = include_bytes!("../assets/fonts/TitilliumWeb-Regular.ttf");
+const FONT_SANS_BOLD: &[u8] = include_bytes!("../assets/fonts/TitilliumWeb-Bold.ttf");
+const FONT_SERIF: &[u8] = include_bytes!("../assets/fonts/PTSerif-Regular.ttf");
+const FONT_SERIF_BOLD: &[u8] = include_bytes!("../assets/fonts/PTSerif-Bold.ttf");
+
+fn fnv1a(bytes: &[u8]) -> u64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in bytes {
+        hash ^= *byte as u64;
+        hash = hash.wrapping_mul(0x1000_0000_01b3);
+    }
+    hash
+}
+
+/// The bold cut of a family name, so `**bold**` inside a serif paragraph stays serif.
+fn bold_of(family: &FontFamily) -> FontFamily {
+    match family {
+        FontFamily::Name(name) => match &**name {
+            "serif" | "serif-bold" => FontFamily::Name(Arc::from("serif-bold")),
+            _ => FontFamily::Name(Arc::from("sans-bold")),
+        },
+        _ => FontFamily::Name(Arc::from("sans-bold")),
+    }
+}
+
 fn install_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
 
-    let regular = load_first(&[
+    let cjk = load_first(&[
         "C:/Windows/Fonts/Deng.ttf",
         "C:/Windows/Fonts/simhei.ttf",
         "C:/Windows/Fonts/simkai.ttf",
@@ -498,56 +529,62 @@ fn install_fonts(ctx: &egui::Context) {
         "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
         "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
     ]);
-    let bold = load_first(&[
-        "C:/Windows/Fonts/Dengb.ttf",
-        "C:/Windows/Fonts/msyhbd.ttc",
-        "C:/Windows/Fonts/simhei.ttf",
-    ]);
 
-    let mut proportional = fonts
-        .families
-        .get(&FontFamily::Proportional)
-        .cloned()
-        .unwrap_or_default();
-    let mut monospace = fonts
-        .families
-        .get(&FontFamily::Monospace)
-        .cloned()
-        .unwrap_or_default();
+    for (name, bytes) in [
+        ("sans", FONT_SANS),
+        ("sans-bold", FONT_SANS_BOLD),
+        ("serif", FONT_SERIF),
+        ("serif-bold", FONT_SERIF_BOLD),
+    ] {
+        fonts.font_data.insert(
+            name.to_string(),
+            Arc::new(egui::FontData::from_static(bytes)),
+        );
+    }
 
-    let mut regular_name = None;
-    if let Some(bytes) = regular {
+    let cjk_name = if let Some(bytes) = cjk {
         let name = "cjk".to_string();
         fonts
             .font_data
             .insert(name.clone(), Arc::new(egui::FontData::from_owned(bytes)));
-        proportional.insert(0, name.clone());
-        monospace.push(name.clone());
-        regular_name = Some(name);
-    }
+        Some(name)
+    } else {
+        None
+    };
 
-    fonts
+    // Every family ends with the CJK face so Chinese never turns into boxes.
+    let stack = |first: &str| {
+        let mut list = vec![first.to_string()];
+        if let Some(cjk) = &cjk_name {
+            list.push(cjk.clone());
+        }
+        list
+    };
+    for name in ["sans", "sans-bold", "serif", "serif-bold"] {
+        fonts.families.insert(
+            egui::FontFamily::Name(Arc::from(name)),
+            stack(name),
+        );
+    }
+    // The document default becomes Titillium, with the CJK face behind it.
+    fonts.families.insert(
+        egui::FontFamily::Proportional,
+        stack("sans"),
+    );
+    let mut mono = fonts
         .families
-        .insert(FontFamily::Proportional, proportional.clone());
-    fonts.families.insert(FontFamily::Monospace, monospace);
-
-    let mut bold_family = Vec::new();
-    if let Some(bytes) = bold {
-        let name = "cjk-bold".to_string();
-        fonts
-            .font_data
-            .insert(name.clone(), Arc::new(egui::FontData::from_owned(bytes)));
-        bold_family.push(name);
+        .get(&egui::FontFamily::Monospace)
+        .cloned()
+        .unwrap_or_default();
+    if let Some(cjk) = &cjk_name {
+        mono.push(cjk.clone());
     }
-    if let Some(name) = regular_name {
-        bold_family.push(name);
-    }
-    if bold_family.is_empty() {
-        bold_family = proportional;
-    }
-    fonts
-        .families
-        .insert(FontFamily::Name(Arc::from("bold")), bold_family);
+    fonts.families.insert(egui::FontFamily::Monospace, mono);
+    // `bold` stays as the generic "bold" family every existing render path uses.
+    fonts.families.insert(
+        egui::FontFamily::Name(Arc::from("bold")),
+        stack("sans-bold"),
+    );
 
     ctx.set_fonts(fonts);
 }
@@ -857,6 +894,9 @@ struct Tab {
     saved_fields: HashMap<u16, HashMap<String, String>>,
     /// `[[sheet]]` rules, gathered before the first box is drawn.
     sheet: HashMap<String, Style>,
+    /// Counts boxes as they are drawn, so each one keeps its own hover state
+    /// across frames without needing an identity of its own.
+    box_seq: u32,
     shown_path: Option<String>,
     /// When the current page's `[[scene]]` timelines started. Reset on every
     /// page load, so a reload replays the animation instead of resuming it.
@@ -1002,6 +1042,7 @@ impl Tab {
             focus_input: false,
             saved_fields: HashMap::new(),
             sheet: HashMap::new(),
+            box_seq: 0,
             shown_path: None,
             scene_clock: None,
             target,
@@ -1448,10 +1489,7 @@ impl Tab {
                 Inline::Bold(t) => (
                     t.clone(),
                     TextFormat {
-                        font_id: FontId::new(
-                            size,
-                            FontFamily::Name(Arc::from("bold")),
-                        ),
+                        font_id: FontId::new(size, bold_of(&family)),
                         color,
                         ..Default::default()
                     },
@@ -1690,8 +1728,21 @@ impl Tab {
             .cloned()
             .unwrap_or_default();
         let merged = style.over(&class);
-        let inner = text.inherit(&merged);
+        let seq = self.box_seq;
+        self.box_seq += 1;
+        let amount = self.hover_amount(ui, seq, &merged);
+        let paint = merged.blend(amount);
+        let mut inner = text.inherit(&merged);
+        // Fade from the colour the text already had, not from transparency: a
+        // box that inherits its colour would otherwise blank its own text.
+        if let Some(hover) = merged.hover_color {
+            inner.color = style::lerp_color(inner.color, hover, amount);
+        }
+        if let Some(link) = merged.hover_link {
+            inner.link = style::lerp_color(inner.link, link, amount);
+        }
 
+        let hover_id = egui::Id::unique(("nac-hover", seq));
         let margin = merged.margin.unwrap_or((0.0, 0.0));
         if margin.1 > 0.0 {
             ui.add_space(margin.1);
@@ -1706,85 +1757,180 @@ impl Tab {
         let centred = matches!(merged.align, Some(style::Align::Center)) && want < available - 1.0;
         let offset = if centred { (available - want) / 2.0 } else { 0.0 };
 
-        ui.horizontal_top(|ui| {
-            ui.spacing_mut().item_spacing.x = 0.0;
-            if margin.0 > 0.0 {
-                ui.add_space(margin.0);
-            }
-            if offset > 0.0 {
-                ui.add_space(offset);
-            }
-            ui.allocate_ui_with_layout(
-                egui::vec2(want, 0.0),
-                Layout::top_down(Align::Min),
-                |ui| {
-                    ui.set_width(want);
-                    let pad = merged.pad.unwrap_or((0.0, 0.0));
-                    let mut frame = egui::Frame::new()
-                        .inner_margin(egui::Margin {
-                            left: pad.0 as i8,
-                            right: pad.0 as i8,
-                            top: pad.1 as i8,
-                            bottom: pad.1 as i8,
-                        });
-                    if let Some(bg) = merged.bg {
-                        frame = frame.fill(bg);
-                    }
-                    if let Some((width, colour)) = merged.border {
-                        frame = frame.stroke(egui::Stroke::new(width, colour));
-                    }
-                    if let Some(radius) = merged.radius {
-                        frame = frame.corner_radius(egui::CornerRadius::same(radius as u8));
-                    }
-                    frame.show(ui, |ui| {
-                        ui.set_width((want - pad.0 * 2.0).max(20.0));
-                        if merged.row == Some(true) {
-                            self.render_row(ui, children, &merged, inner);
-                        } else {
-                            if let Some(h) = merged.min_height {
-                                ui.set_min_height(h);
-                            }
-                            self.render_list(ui, children, inner);
-                        }
-                    });
-                },
-            );
+        // The box is placed by giving it a rectangle, not by nesting a
+        // horizontal layout: a horizontal inside a horizontal makes egui hand
+        // the whole remaining width to the first child, which is how a row of
+        // two boxes became a box plus a sliver at the far right.
+        let mut rect = ui.available_rect_before_wrap();
+        rect.min.x += margin.0 + offset;
+        rect.max.x = rect.min.x + want;
+        let pad = merged.pad.unwrap_or((0.0, 0.0));
+        let mut frame = egui::Frame::new().inner_margin(egui::Margin {
+            left: pad.0 as i8,
+            right: pad.0 as i8,
+            top: pad.1 as i8,
+            bottom: pad.1 as i8,
         });
+        if let Some(bg) = paint.bg {
+            frame = frame.fill(bg);
+        }
+        if let Some((width, colour)) = paint.border {
+            frame = frame.stroke(egui::Stroke::new(width, colour));
+        }
+        if let Some(radius) = merged.radius {
+            frame = frame.corner_radius(egui::CornerRadius::same(radius as u8));
+        }
+
+        let shown = ui.scope_builder(
+            egui::UiBuilder::new()
+                .max_rect(rect)
+                .layout(Layout::top_down(Align::Min)),
+            |ui| {
+                ui.set_min_width(want);
+                ui.set_max_width(want);
+                frame.show(ui, |ui| {
+                    ui.set_min_width((want - pad.0 * 2.0).max(20.0));
+                    ui.set_max_width((want - pad.0 * 2.0).max(20.0));
+                    if merged.row == Some(true) {
+                        self.render_row(ui, children, &merged, inner);
+                    } else {
+                        if let Some(h) = merged.min_height {
+                            ui.set_min_height(h);
+                        }
+                        let cross = match inner.align {
+                            Some(style::Align::Center) => egui::Align::Center,
+                            Some(style::Align::Right) => egui::Align::Max,
+                            _ => egui::Align::Min,
+                        };
+                        if cross == egui::Align::Min {
+                            self.render_list(ui, children, inner);
+                        } else {
+                            ui.with_layout(Layout::top_down(cross), |ui| {
+                                self.render_list(ui, children, inner)
+                            });
+                        }
+                    }
+                })
+            },
+        );
+        // Remembered for the next frame, which is what makes hover possible
+        // without asking the layout what it just built.
+        ui.ctx()
+            .data_mut(|d| d.insert_temp(hover_id, shown.inner.response.rect));
         if margin.1 > 0.0 {
             ui.add_space(margin.1);
         }
     }
 
+    /// A monogram avatar: the name picks a colour, the name's first letter is
+    /// drawn on it. No network, no file, and the same name always looks the
+    /// same, so two visits to the same profile show the same face.
+    fn render_avatar(&mut self, ui: &mut egui::Ui, name: &str, size: f32) {
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
+        let painter = ui.painter();
+        let seed = fnv1a(name.as_bytes());
+        let hue = (seed % 360) as f32 / 360.0;
+        let fill = Color32::from(egui::ecolor::Hsva::new(hue, 0.52, 0.72, 1.0));
+        let radius = (size * 0.14).clamp(2.0, 10.0) as u8;
+        painter.rect_filled(rect, egui::CornerRadius::same(radius), fill);
+        let letter = name
+            .chars()
+            .find(|c| !c.is_whitespace())
+            .map(|c| c.to_uppercase().to_string())
+            .unwrap_or_else(|| "?".to_string());
+        painter.text(
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            letter,
+            FontId::new(size * 0.46, Text::default().bold_family()),
+            Color32::WHITE,
+        );
+    }
+
+    /// How far into its hover look a box is, 0 for "not at all". Uses last
+    /// frame's rectangle because the box has not been laid out yet.
+    fn hover_amount(&self, ui: &egui::Ui, seq: u32, style: &Style) -> f32 {
+        if style.hover_bg.is_none() && style.hover_color.is_none() && style.hover_border.is_none()
+        {
+            return 0.0;
+        }
+        let id = egui::Id::unique(("nac-hover", seq));
+        let previous: Option<egui::Rect> = ui.ctx().data(|d| d.get_temp(id));
+        let over = previous.is_some_and(|rect| ui.ctx().rect_contains_pointer(ui.layer_id(), rect));
+        ui.ctx()
+            .animate_bool_with_time(id.with("t"), over, style.transition.unwrap_or(0.12))
+    }
+
+    /// Lays out a row of boxes by giving each one a rectangle.
+    ///
+    /// Widths come from the child's own `w`, or from sharing what is left in
+    /// proportion to `grow`; a child that says neither gets an equal share.
+    /// egui is not asked to run a horizontal layout here because a horizontal
+    /// inside a horizontal hands the whole remaining width to the first child.
     fn render_row(&mut self, ui: &mut egui::Ui, children: Vec<Block>, style: &Style, text: Text) {
         let gap = style.gap.unwrap_or(12.0);
-        ui.horizontal_top(|ui| {
-            ui.spacing_mut().item_spacing.x = gap;
-            let grows: Vec<f32> = children
-                .iter()
-                .map(|child| match child {
-                    Block::Box { style, .. } => style.grow.unwrap_or(0.0),
-                    _ => 0.0,
-                })
-                .collect();
-            let total: f32 = grows.iter().sum();
-            let count = children.len().max(1);
-            let pool = (ui.available_width() - gap * (count.saturating_sub(1)) as f32).max(40.0);
-            for (child, grow) in children.into_iter().zip(grows) {
-                if total > 0.0 && grow > 0.0 {
-                    let width = (pool * grow / total).max(40.0);
-                    ui.allocate_ui_with_layout(
-                        egui::vec2(width, 0.0),
-                        Layout::top_down(Align::Min),
-                        |ui| {
-                            ui.set_width(width);
-                            self.render_box(ui, &Style::default(), vec![child], text);
-                        },
-                    );
-                } else {
-                    self.render_box(ui, &Style::default(), vec![child], text);
-                }
+        let area = ui.available_rect_before_wrap();
+        let count = children.len();
+        if count == 0 {
+            return;
+        }
+
+        let mut fixed: Vec<Option<f32>> = vec![None; count];
+        let mut weights: Vec<f32> = vec![0.0; count];
+        for (slot, child) in children.iter().enumerate() {
+            let child_style = self.block_style(child);
+            match (child_style.width.or(child_style.max_width), child_style.grow) {
+                (Some(w), _) => fixed[slot] = Some(w.min(area.width()).max(1.0)),
+                (None, Some(grow)) if grow > 0.0 => weights[slot] = grow,
+                _ => weights[slot] = 1.0,
             }
-        });
+        }
+        let taken: f32 = fixed.iter().flatten().sum();
+        let weight_total: f32 = weights.iter().sum::<f32>().max(0.001);
+        let pool = (area.width() - gap * (count - 1) as f32 - taken).max(20.0);
+
+        let mut x = area.min.x;
+        let mut bottom = area.min.y;
+        for (slot, child) in children.into_iter().enumerate() {
+            let width = fixed[slot].unwrap_or(pool * weights[slot] / weight_total);
+            let rect = egui::Rect::from_min_max(
+                egui::pos2(x, area.min.y),
+                egui::pos2(x + width, area.max.y),
+            );
+            let drawn = ui.scope_builder(
+                egui::UiBuilder::new()
+                    .max_rect(rect)
+                    .layout(Layout::top_down(Align::Min)),
+                |ui| {
+                    ui.set_min_width(width);
+                    ui.set_max_width(width);
+                    self.render_box(ui, &Style::default(), vec![child], text);
+                    ui.min_rect().bottom()
+                },
+            );
+            bottom = bottom.max(drawn.inner);
+            x += width + gap;
+        }
+
+        // One allocation for the whole row: the boxes inside placed themselves.
+        let used = egui::Rect::from_min_max(area.min, egui::pos2(area.max.x, bottom));
+        ui.allocate_rect(used, egui::Sense::hover());
+    }
+
+    /// The style a child would end up with, class rules included.
+    fn block_style(&self, block: &Block) -> Style {
+        match block {
+            Block::Box { style, .. } => {
+                let class = style
+                    .class
+                    .as_ref()
+                    .and_then(|name| self.sheet.get(name))
+                    .cloned()
+                    .unwrap_or_default();
+                style.over(&class)
+            }
+            _ => Style::default(),
+        }
     }
 
     fn render_term(&mut self, ui: &mut egui::Ui, term: &markup::Term) {
@@ -2078,6 +2224,7 @@ impl Tab {
     fn render_blocks(&mut self, ui: &mut egui::Ui) {
         let blocks = self.blocks.clone();
         self.sheet.clear();
+        self.box_seq = 0;
         collect_sheet(&blocks, &mut self.sheet);
         self.render_list(ui, blocks, Text::default());
     }
@@ -2103,7 +2250,7 @@ impl Tab {
                         &parts,
                         text.size * scale,
                         text.color,
-                        FontFamily::Name(Arc::from("bold")),
+                        text.bold_family(),
                     ));
                     ui.add_space(6.0);
                 }
@@ -2119,7 +2266,7 @@ impl Tab {
                         ui.painter()
                             .rect_filled(rect, 0.0, Color32::from_gray(200));
                         ui.add_space(8.0);
-                        ui.label(self.job(&parts, 16.0, muted, FontFamily::Proportional));
+                        ui.label(self.job(&parts, 16.0, muted, text.family()));
                     });
                     ui.add_space(8.0);
                 }
@@ -2128,7 +2275,7 @@ impl Tab {
                         ui.horizontal(|ui| {
                             ui.add_space(12.0);
                             ui.label(RichText::new("•").color(muted));
-                            ui.label(self.job(&item, 17.0, body, FontFamily::Proportional));
+                            ui.label(self.job(&item, 17.0, body, text.family()));
                         });
                     }
                     ui.add_space(8.0);
@@ -2205,6 +2352,7 @@ impl Tab {
                 Block::Hidden { name, value } => {
                     self.fields.insert(name.clone(), value.clone());
                 }
+                Block::Avatar { name, size } => self.render_avatar(ui, &name, size),
                 Block::Prefill { name, value } => {
                     // Only if nobody has typed into it yet: putting the starting
                     // text back every frame would erase what the reader types.
@@ -2260,13 +2408,13 @@ impl Tab {
                                     .color(muted),
                             );
                             ui.add_space(2.0);
-                            ui.label(self.job(&item, 17.0, body, FontFamily::Proportional));
+                            ui.label(self.job(&item, 17.0, body, text.family()));
                         });
                     }
                     ui.add_space(8.0);
                 }
                 Block::Caption(parts) => {
-                    ui.label(self.job(&parts, 13.0, muted, FontFamily::Proportional));
+                    ui.label(self.job(&parts, 13.0, muted, text.family()));
                     ui.add_space(8.0);
                 }
                 Block::Table { header, rows } => {

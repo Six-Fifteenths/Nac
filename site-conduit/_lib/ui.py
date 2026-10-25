@@ -11,19 +11,22 @@ import nac
 
 from _lib import store
 
+# 每条规则写成一行：sheet() 会逐行发出去，跨行会被拆坏。
+# 数值照抄 Conduit 原版的样式表（rem 按 16px 折算）。
 SHEET = """
-.page { maxw: 980; align: center; pad: 0,16; }
-.nav  { bg: #5cb85c; color: #ffffff; pad: 14,12; size: 16; weight: bold; link: #ffffff; }
-.hero { bg: #5cb85c; color: #ffffff; pad: 44,34; align: center; }
-.hero-title { color: #ffffff; size: 42; weight: bold; align: center; }
-.hero-sub { color: #ffffff; size: 20; align: center; }
-.card { bg: #ffffff; border: 1px:#dddddd; radius: 4; pad: 18; margin: 0,14; }
-.tag  { color: #999999; border: 1px:#dddddd; radius: 12; pad: 2,8; size: 13; link: #999999; }
-.meta { color: #bbbbbb; size: 13; link: #5cb85c; }
-.lead { color: #999999; size: 16; italic: 1; }
-.btn  { bg: #5cb85c; color: #ffffff; radius: 4; pad: 10,8; size: 15; weight: bold; align: center; link: #ffffff; }
-.side { bg: #f3f3f3; border: 1px:#dddddd; radius: 4; pad: 14; }
-.foot { color: #bbbbbb; size: 13; align: center; margin: 30,0; link: #5cb85c; }
+.page { maxw: 980; align: center; pad: 0,16; font: serif; color: #373a3c; }
+.nav { bg: #5cb85c; color: #ffffff; pad: 8,16; size: 15; weight: bold; link: #ffffff; font: sans; }
+.brand { size: 24; weight: bold; color: #ffffff; link: #ffffff; font: sans; }
+.hero { bg: #5cb85c; color: #ffffff; pad: 32,32; ta: center; }
+.hero-title { color: #ffffff; size: 56; weight: bold; ta: center; font: serif; }
+.hero-sub { color: #ffffff; size: 24; ta: center; font: serif; italic: 1; }
+.card { bg: #ffffff; border: 1px:#dddddd; radius: 4; pad: 20; margin: 0,24; hover-border: 1:#bbbbbb; transition: 140; }
+.meta { color: #bbbbbb; size: 13; link: #5cb85c; font: sans; }
+.lead { color: #999999; size: 16; font: serif; }
+.article-title { color: #373a3c; size: 28; weight: bold; font: serif; }
+.btn { bg: #5cb85c; color: #ffffff; radius: 4; pad: 10,8; size: 15; weight: bold; align: center; link: #ffffff; font: sans; hover-bg: #449d44; hover-border: 1:#398439; }
+.side { bg: #f3f3f3; border: 1px:#dddddd; radius: 4; pad: 16; font: sans; }
+.foot { color: #bbbbbb; size: 13; ta: center; margin: 30,0; link: #5cb85c; font: sans; }
 """
 
 
@@ -47,18 +50,21 @@ def hero(title, tagline):
 
 
 def nav(user):
-    parts = ["conduit"]
     if user:
-        parts += ["          ", nac.inline_path("/", "首页"), "   ",
-                  nac.inline_path("/editor/", "写文章"), "   ",
-                  nac.inline_path("/settings", "设置"), "   ",
-                  nac.inline_path("/profile/" + user["username"], user["username"])]
+        links = [nac.inline_path("/", "首页"),
+                 nac.inline_path("/editor/", "写文章"),
+                 nac.inline_path("/settings", "设置"),
+                 nac.inline_path("/profile/" + user["username"], user["username"])]
     else:
-        parts += ["          ", nac.inline_path("/", "首页"), "   ",
-                  nac.inline_path("/login", "登录"), "   ",
-                  nac.inline_path("/register", "注册")]
+        links = [nac.inline_path("/", "首页"),
+                 nac.inline_path("/login", "登录"),
+                 nac.inline_path("/register", "注册")]
     with nac.box("nav"):
-        nac.p(*parts)
+        with nac.row(gap=18):
+            with nac.box("brand", w=150):
+                nac.p("conduit")
+            with nac.box(grow=1):
+                nac.p(*joined(links))
     nac.gap()
 
 
@@ -77,23 +83,45 @@ def tabs_row(user, active):
     nac.gap()
 
 
+def _opt(row, name, default=None):
+    """sqlite3.Row 没有 .get()，取不到的列就当没有。"""
+    try:
+        value = row[name]
+    except (IndexError, KeyError):
+        return default
+    return default if value is None else value
+
+
+def byline(row, size=28):
+    """头像 + 作者那一行。两栏：左边给头像固定宽度，右边吃掉剩下的。"""
+    with nac.row(gap=10):
+        with nac.box(w=size + 2):
+            nac.avatar(row["author"], size)
+        with nac.box(grow=1):
+            with nac.box("meta"):
+                bits = []
+                if _opt(row, "following"):
+                    bits += [chip("已关注"), "  "]
+                bits.append(nac.inline_path("/profile/" + row["author"], row["author"]))
+                bits.append("   ·   ")
+                bits.append(row["created"])
+                tags = _opt(row, "tags")
+                if tags:
+                    first = tags.split(",")[0]
+                    bits += ["   ·   ", nac.inline_path("/tag/" + first, "#" + first)]
+                favourites = _opt(row, "fav_count")
+                if favourites is not None:
+                    bits += ["   ·   ♥ " + str(favourites)]
+                nac.p(*bits)
+
+
 def article_card(row):
     with nac.box("card"):
         nac.h3(row["title"])
-        nac.p(nac.i(row["description"]))
+        with nac.box("lead"):
+            nac.p(row["description"])
         nac.gap()
-        with nac.box("meta"):
-            bits = []
-            if row["following"]:
-                bits += [chip("已关注"), "  "]
-            bits.append(nac.inline_path("/profile/" + row["author"], row["author"]))
-            bits.append("   ·   ")
-            bits.append(row["created"])
-            if row["tags"]:
-                bits += ["   ", nac.inline_path("/tag/" + row["tags"].split(",")[0],
-                                                "#" + row["tags"].split(",")[0])]
-            bits += ["   ·   ♥ " + str(row["fav_count"])]
-            nac.p(*bits)
+        byline(row)
         nac.gap()
         nac.p(nac.inline_path("/article/" + row["slug"], "读全文 →"))
 

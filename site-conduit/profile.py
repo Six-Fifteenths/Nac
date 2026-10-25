@@ -37,11 +37,15 @@ page = 1
 if tab == "favorites" and len(parts) > 2 and parts[2].isdigit():
     page = int(parts[2])
 
-nac.h1(name)
-if who["bio"]:
-    nac.p(nac.i(who["bio"]))
-else:
-    nac.p(nac.i("这个人还没写简介。"))
+with nac.row(gap=14):
+    with nac.box(w=66):
+        nac.avatar(name, 64)
+    with nac.box(grow=1):
+        nac.h1(name)
+        if who["bio"]:
+            nac.p(nac.i(who["bio"]))
+        else:
+            nac.p(nac.i("这个人还没写简介。"))
 nac.gap()
 
 me = user is not None and user["id"] == who["id"]

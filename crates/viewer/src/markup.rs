@@ -174,6 +174,12 @@ pub enum Block {
         name: String,
         value: String,
     },
+    /// `[[avatar 名字 32]]`: a square avatar drawn from the name alone. Nothing
+    /// is fetched, so a page cannot make the client talk to the network.
+    Avatar {
+        name: String,
+        size: f32,
+    },
     /// `[[scene WxH seconds]] … [[end]]`: a timeline of rectangles the client
     /// interpolates. The page decides what moves and when; nothing here is
     /// specific to any one demo.
@@ -444,6 +450,18 @@ fn parse_one(lines: &[&str], i: &mut usize) -> Option<Block> {
             label,
             secret: true,
         });
+    }
+
+    if let Some(rest) = t.strip_prefix("[[avatar ") {
+        *i += 1;
+        let mut parts = inner_spec(rest).split_whitespace();
+        let name = parts.next().unwrap_or_default().to_string();
+        let size = parts
+            .next()
+            .and_then(|s| s.parse::<f32>().ok())
+            .unwrap_or(40.0)
+            .clamp(12.0, 160.0);
+        return Some(Block::Avatar { name, size });
     }
 
     if let Some(rest) = t.strip_prefix("[[prefill ") {
@@ -1209,6 +1227,28 @@ mod tests {
                 assert!(matches!(children[0], Block::Heading(1, _)));
             }
             other => panic!("expected a box, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_avatar_only_needs_a_name() {
+        let plain = parse("[[avatar alice]]\n");
+        let sized = parse("[[avatar alice 72]]\n");
+        let (one, two) = (only(&plain), only(&sized));
+        match (one, two) {
+            (
+                Block::Avatar { name, size },
+                Block::Avatar {
+                    name: name2,
+                    size: size2,
+                },
+            ) => {
+                assert_eq!(name, "alice");
+                assert_eq!(name2, "alice");
+                assert_eq!(*size, 40.0);
+                assert_eq!(*size2, 72.0);
+            }
+            other => panic!("expected two avatars, got {other:?}"),
         }
     }
 

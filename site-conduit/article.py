@@ -67,17 +67,12 @@ if nac.submitted():
 
 # ------------------------------------------------------------------ 正文
 nac.h1(row["title"])
-nac.p(nac.i(row["description"]))
+with nac.box("lead"):
+    nac.p(row["description"])
 nac.gap()
-nac.p(
-    nac.inline_path("/profile/" + row["author"], row["author"]),
-    "  ·  ",
-    row["created"],
-    "  ·  ♥ ",
-    str(row["fav_count"]),
-    "  ·  评论 ",
-    str(row["comment_count"]),
-)
+ui.byline(row, 32)
+nac.gap()
+nac.p("♥ ", str(row["fav_count"]), "   ·   评论 ", str(row["comment_count"]))
 nac.hr()
 
 for para in row["body"].split("\n\n"):

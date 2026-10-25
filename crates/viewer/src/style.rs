@@ -12,6 +12,36 @@
 
 use eframe::egui::{self, Color32};
 
+/// What a box paints at one instant, after any hover blend.
+pub struct Painted {
+    pub bg: Option<Color32>,
+    pub border: Option<(f32, Color32)>,
+}
+
+pub fn lerp_color(a: Color32, b: Color32, t: f32) -> Color32 {
+    let f = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
+    Color32::from_rgba_unmultiplied(
+        f(a.r(), b.r()),
+        f(a.g(), b.g()),
+        f(a.b(), b.b()),
+        f(a.a(), b.a()),
+    )
+}
+
+/// `None` on either side means "leave it alone", which is what a background
+/// that does not change on hover should do.
+fn mix(base: Option<Color32>, hover: Option<Color32>, t: f32) -> Option<Color32> {
+    match (base, hover) {
+        (_, None) => base,
+        (None, Some(h)) => Some(h.gamma_multiply(t)),
+        (Some(a), Some(h)) => Some(lerp_color(a, h, t)),
+    }
+}
+
+fn family(name: &str) -> egui::FontFamily {
+    egui::FontFamily::Name(std::sync::Arc::from(name))
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Align {
     Left,
@@ -23,6 +53,26 @@ pub enum Align {
 pub enum Weight {
     Normal,
     Bold,
+}
+
+/// Which of the bundled faces to draw with. All of them live inside the binary,
+/// so a page looks the same on every machine.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Font {
+    Sans,
+    Serif,
+    Mono,
+}
+
+impl Font {
+    fn parse(value: &str) -> Option<Font> {
+        match value {
+            "sans" | "sans-serif" | "proportional" | "ui" => Some(Font::Sans),
+            "serif" => Some(Font::Serif),
+            "mono" | "monospace" | "code" => Some(Font::Mono),
+            _ => None,
+        }
+    }
 }
 
 /// Every property is optional: an unset one inherits from the enclosing box.
@@ -48,11 +98,22 @@ pub struct Style {
     /// Share of the leftover width when the parent is a row.
     pub grow: Option<f32>,
     pub align: Option<Align>,
+    /// Where the text sits inside its box, as opposed to where the box sits
+    /// inside its parent (`align`).
+    pub text_align: Option<Align>,
     pub size: Option<f32>,
     pub weight: Option<Weight>,
-    pub mono: Option<bool>,
+    pub font: Option<Font>,
     pub italic: Option<bool>,
     pub link: Option<Color32>,
+    /// What the box looks like while the pointer is over it. A hover only ever
+    /// changes paint, never layout, so nothing jumps when the mouse arrives.
+    pub hover_bg: Option<Color32>,
+    pub hover_color: Option<Color32>,
+    pub hover_border: Option<(f32, Color32)>,
+    pub hover_link: Option<Color32>,
+    /// Fade time in milliseconds; 0 means the change is instant.
+    pub transition: Option<f32>,
     /// `nowrap`: do not wrap lines (a navbar, a tag row).
     pub nowrap: Option<bool>,
 }
@@ -75,11 +136,17 @@ impl Style {
             row: self.row.or(base.row),
             grow: self.grow.or(base.grow),
             align: self.align.or(base.align),
+            text_align: self.text_align.or(base.text_align),
             size: self.size.or(base.size),
             weight: self.weight.or(base.weight),
-            mono: self.mono.or(base.mono),
+            font: self.font.or(base.font),
             italic: self.italic.or(base.italic),
             link: self.link.or(base.link),
+            hover_bg: self.hover_bg.or(base.hover_bg),
+            hover_color: self.hover_color.or(base.hover_color),
+            hover_border: self.hover_border.or(base.hover_border),
+            hover_link: self.hover_link.or(base.hover_link),
+            transition: self.transition.or(base.transition),
             nowrap: self.nowrap.or(base.nowrap),
         }
     }
@@ -108,7 +175,15 @@ impl Style {
                 }
             }
             "grow" | "flex" => self.grow = number(value),
-            "align" | "text-align" => {
+            "ta" | "text-align" | "halign" => {
+                self.text_align = match value {
+                    "center" => Some(Align::Center),
+                    "right" | "end" => Some(Align::Right),
+                    "left" | "start" => Some(Align::Left),
+                    _ => None,
+                }
+            }
+            "align" => {
                 self.align = match value {
                     "center" => Some(Align::Center),
                     "right" | "end" => Some(Align::Right),
@@ -124,15 +199,16 @@ impl Style {
                     _ => None,
                 }
             }
-            "mono" | "font-family" => {
-                self.mono = match value {
-                    "mono" | "monospace" => Some(true),
-                    "sans" | "serif" | "proportional" => Some(false),
-                    _ => None,
-                }
-            }
+            "font" | "mono" | "font-family" => self.font = Font::parse(value),
             "italic" | "font-style" => self.italic = Some(value == "italic"),
             "link" => self.link = color(value),
+            "hover-bg" | "hover-background" => self.hover_bg = color(value),
+            "hover-color" | "hover-fg" => self.hover_color = color(value),
+            "hover-border" => self.hover_border = border(value),
+            "hover-link" => self.hover_link = color(value),
+            "transition" => {
+                self.transition = number(&value.replace("ms", "")).map(|ms| ms / 1000.0)
+            }
             "nowrap" | "white-space" => self.nowrap = Some(value == "nowrap"),
             _ => {}
         }
@@ -165,6 +241,20 @@ impl Style {
         }
         style
     }
+
+    /// The style a pointer-over box actually paints with, `t` of the way there.
+    pub fn blend(&self, t: f32) -> Painted {
+        let t = t.clamp(0.0, 1.0);
+        Painted {
+            bg: mix(self.bg, self.hover_bg, t),
+            border: match (self.border, self.hover_border) {
+                (None, Some(h)) => Some((h.0, h.1.gamma_multiply(t))),
+                (Some(a), Some(h)) => Some((h.0, lerp_color(a.1, h.1, t))),
+                (b, None) => b,
+            },
+        }
+    }
+
 }
 
 /// Text properties that a child block inherits from its box.
@@ -173,7 +263,8 @@ pub struct Text {
     pub color: Color32,
     pub size: f32,
     pub bold: bool,
-    pub mono: bool,
+    pub font: Font,
+    pub align: Option<Align>,
     pub italic: bool,
     pub link: Color32,
 }
@@ -184,7 +275,8 @@ impl Default for Text {
             color: Color32::from_gray(28),
             size: 17.0,
             bold: false,
-            mono: false,
+            font: Font::Sans,
+            align: None,
             italic: false,
             link: Color32::from_rgb(40, 100, 190),
         }
@@ -198,19 +290,29 @@ impl Text {
             color: style.color.unwrap_or(self.color),
             size: style.size.unwrap_or(self.size),
             bold: matches!(style.weight, Some(Weight::Bold)) || (style.weight.is_none() && self.bold),
-            mono: style.mono.unwrap_or(self.mono),
+            font: style.font.unwrap_or(self.font),
+            align: style.text_align.or(self.align),
             italic: style.italic.unwrap_or(self.italic),
             link: style.link.unwrap_or(self.link),
         }
     }
 
     pub fn family(&self) -> egui::FontFamily {
-        if self.mono {
-            egui::FontFamily::Monospace
-        } else if self.bold {
-            egui::FontFamily::Name(std::sync::Arc::from("bold"))
-        } else {
-            egui::FontFamily::Proportional
+        match (self.font, self.bold) {
+            (Font::Mono, _) => egui::FontFamily::Monospace,
+            (Font::Serif, true) => family("serif-bold"),
+            (Font::Serif, false) => family("serif"),
+            (Font::Sans, true) => family("sans-bold"),
+            (Font::Sans, false) => family("sans"),
+        }
+    }
+
+    /// The bold cut of whichever family this text uses.
+    pub fn bold_family(&self) -> egui::FontFamily {
+        match self.font {
+            Font::Mono => egui::FontFamily::Monospace,
+            Font::Serif => family("serif-bold"),
+            Font::Sans => family("sans-bold"),
         }
     }
 }
@@ -312,5 +414,42 @@ mod tests {
         let inner = white.inherit(&Style::default());
         assert_eq!(inner.color, white.color);
         assert!(inner.bold);
+    }
+
+    #[test]
+    fn a_hover_never_changes_the_box_only_its_paint() {
+        let quiet = Style::from_attrs("bg=#ffffff border=1:#dddddd");
+        let loud = Style::from_attrs(
+            "bg=#ffffff border=1:#dddddd hover-bg=#ffe9e9 hover-border=3:#cc0000 transition=200",
+        );
+        // Nothing set: the box looks the same at every point of the hover.
+        let still = quiet.blend(1.0);
+        assert_eq!(still.bg, quiet.bg);
+        assert_eq!(still.border, quiet.border);
+        // Halfway: the colours are between the two ends, not either end.
+        let half = loud.blend(0.5);
+        assert_eq!(half.bg, Some(Color32::from_rgb(0xff, 0xf4, 0xf4)));
+        assert_eq!(half.border.map(|b| b.0), Some(3.0));
+        // Fully hovered: exactly the hover colour.
+        assert_eq!(loud.blend(1.0).bg, Some(Color32::from_rgb(0xff, 0xe9, 0xe9)));
+        assert_eq!(loud.blend(1.0).border, Some((3.0, Color32::from_rgb(0xcc, 0, 0))));
+        // A box with no background fades one in from nothing rather than jumping.
+        let bare = Style::from_attrs("hover-bg=#ffe9e9");
+        assert_eq!(bare.blend(0.0).bg.map(|c| c.a()), Some(0));
+        let mid = bare.blend(0.5).bg.unwrap().a();
+        assert!(mid > 0 && mid < 255, "halfway there, got alpha {mid}");
+    }
+
+    #[test]
+    fn a_font_is_picked_by_name_and_decides_the_family() {
+        let serif = Text::default().inherit(&Style::from_attrs("font=serif"));
+        assert_eq!(serif.font, Font::Serif);
+        let mono = Text::default().inherit(&Style::from_attrs("font=monospace"));
+        assert_eq!(mono.font, Font::Mono);
+        assert_eq!(mono.family(), egui::FontFamily::Monospace);
+        assert_eq!(
+            serif.bold_family(),
+            egui::FontFamily::Name(std::sync::Arc::from("serif-bold"))
+        );
     }
 }

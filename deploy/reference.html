@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<!--
+  The same numbers as site-conduit/_lib/ui.py's sheet, written by hand in CSS.
+
+  This file exists for one purpose: to see what a real browser does with the
+  values Nac uses, so the difference between the two pictures is the renderer
+  and nothing else. It is not part of any site.
+
+  To open it, the fonts have to sit beside it (Chromium refuses to load a font
+  from a parent directory over file://):
+
+      mkdir deploy/fonts
+      copy crates/viewer/assets/fonts/*.ttf deploy/fonts/
+
+  then open deploy/reference.html with the path below pointed at ./fonts/, and
+  put its screenshot next to deploy/ours.png in deploy/compare.html.
+-->
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>conduit · 参照</title>
+<style>
+@font-face { font-family: 'Titillium Web'; src: url('../../crates/viewer/assets/fonts/TitilliumWeb-Regular.ttf'); font-weight: 400; }
+@font-face { font-family: 'Titillium Web'; src: url('../../crates/viewer/assets/fonts/TitilliumWeb-Bold.ttf'); font-weight: 700; }
+@font-face { font-family: 'PT Serif'; src: url('../../crates/viewer/assets/fonts/PTSerif-Regular.ttf'); font-weight: 400; }
+@font-face { font-family: 'PT Serif'; src: url('../../crates/viewer/assets/fonts/PTSerif-Bold.ttf'); font-weight: 700; }
+
+html, body { margin: 0; padding: 0; background: #f7f7f7; }
+body { font-family: 'PT Serif', 'Microsoft YaHei', serif; color: #373a3c; font-size: 17px; }
+
+/* .page { maxw: 980; pad: 0,16 } */
+.page { max-width: 980px; margin: 0 auto; padding: 0 16px; }
+
+/* .nav { bg:#5cb85c pad:8,16 size:15 weight:bold } */
+.nav { background: #5cb85c; color: #fff; padding: 8px 16px; font-family: 'Titillium Web', sans-serif;
+       font-size: 15px; font-weight: 700; }
+.nav .brand { font-size: 24px; width: 150px; }
+.nav a { color: #fff; text-decoration: none; }
+
+/* .hero { bg:#5cb85c pad:32,32 align:center } */
+.hero { background: #5cb85c; color: #fff; padding: 32px 32px; text-align: center; }
+.hero .title { font-size: 56px; font-weight: 700; margin: 12px 0 8px; }
+.hero .sub { font-size: 24px; font-style: italic; margin: 8px 0 12px; }
+
+/* .card { bg:#fff border:1px:#ddd radius:4 pad:20 margin:0,24 } */
+.card { background: #fff; border: 1px solid #ddd; border-radius: 4px; padding: 20px; margin: 24px 0; }
+.card h3 { font-size: 18.7px; font-weight: 700; margin: 14px 0 6px; }
+/* .lead { color:#999 size:16 } */
+.lead { color: #999; font-size: 16px; margin: 8px 0; }
+/* .meta { color:#bbb size:13 font:sans } */
+.meta { color: #bbb; font-size: 13px; font-family: 'Titillium Web', sans-serif; }
+.meta a { color: #5cb85c; text-decoration: none; }
+/* .side { bg:#f3f3f3 border:1px:#ddd radius:4 pad:16 font:sans } */
+.side { background: #f3f3f3; border: 1px solid #ddd; border-radius: 4px; padding: 16px; margin: 24px 0;
+        font-family: 'Titillium Web', sans-serif; }
+.side a { color: #5cb85c; text-decoration: none; }
+.side p { margin: 6px 0; }
+
+/* 2:1 两栏，gap 24 */
+.row { display: flex; gap: 24px; align-items: flex-start; }
+.col-a { flex: 2; }
+.col-b { flex: 1; }
+
+.avatar { display: inline-block; width: 28px; height: 28px; border-radius: 4px; background: #d9c9a3;
+          color: #fff; font-family: 'Titillium Web', sans-serif; font-weight: 700; font-size: 13px;
+          text-align: center; line-height: 28px; }
+.byline { display: flex; gap: 10px; align-items: center; }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="nav">
+    <div class="row">
+      <div class="brand">conduit</div>
+      <div><a href="#">首页</a> &nbsp;&nbsp; <a href="#">登录</a> &nbsp;&nbsp; <a href="#">注册</a></div>
+    </div>
+  </div>
+
+  <div class="hero">
+    <div class="title">conduit</div>
+    <div class="sub">A place to share your knowledge.</div>
+  </div>
+
+  <div class="row">
+    <div class="col-a">
+      <div class="card">
+        <h3>收藏、评论、关注</h3>
+        <div class="lead">三个动作，三个路径</div>
+        <div class="byline">
+          <span class="avatar">D</span>
+          <span class="meta"><a href="#">demo</a> &nbsp;·&nbsp; 2026-10-26 00:22 &nbsp;·&nbsp; <a href="#">#realworld</a> &nbsp;·&nbsp; ♥ 0</span>
+        </div>
+        <p><a href="#" style="color:#2864be;text-decoration:none">读全文 →</a></p>
+      </div>
+
+      <div class="card">
+        <h3>一篇用表单写出来的文章</h3>
+        <div class="lead">RealWorld 的编辑器，落在一个 Python 页面里</div>
+        <div class="byline">
+          <span class="avatar">D</span>
+          <span class="meta"><a href="#">demo</a> &nbsp;·&nbsp; 2026-10-26 00:22 &nbsp;·&nbsp; <a href="#">#nac</a> &nbsp;·&nbsp; ♥ 0</span>
+        </div>
+        <p><a href="#" style="color:#2864be;text-decoration:none">读全文 →</a></p>
+      </div>
+    </div>
+
+    <div class="col-b">
+      <div class="side">
+        <p><b>热门标签</b></p>
+        <p><a href="#">nac</a></p>
+        <p><a href="#">realworld</a></p>
+        <p><i>按标签过滤见 /tag/&lt;名字&gt;。</i></p>
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>
