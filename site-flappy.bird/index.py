@@ -25,41 +25,31 @@ def sid():
 
 
 def demo():
-    """一段 6 秒的演示：鸟上下摆，水管从右滚到左。"""
+    """一段 6 秒的演示：鸟上下摆，水管从右滚到左。
+
+    用的是 `_lib/game.py` 里同一批零件 —— 所以演示和真游戏的画法不会走样。
+    """
     out = ["[[scene %dx%d 6.0]]" % (game.FIELD_W, game.FIELD_H)]
 
-    still = [
-        ("9fe6f2", 700, 460, -80, -80),
-        ("ded895", 700, 96, -80, game.GROUND_Y - 6),
-        ("c9c078", 700, 6, -80, game.GROUND_Y - 6),
-    ]
-    for color, w, h, x, y in still:
+    for color, w, h, x, y in game.background():
         out.append("[[bar %s %d %d]]" % (color, w, h))
         out.append("[[at 0 %.1f %.1f]]" % (x, y))
 
-    # 两根水管：6 秒里从右滚到左
-    for index, start in enumerate((560.0, 860.0)):
+    # 两根水管：6 秒里从右滚到左，零件相对水管左上角
+    for index, start_x in enumerate((560.0, 860.0)):
         gap = 70.0 + index * 40
-        keys = [(step * 0.25, start - step * 0.25 * 120.0) for step in range(25)]
-        out.append("[[bar 74bf2e %d %d]]" % (game.PIPE_WIDTH, round(gap) + 20))
-        for t, x in keys:
-            out.append("[[at %.2f %.1f -20]]" % (t, x))
-        low = gap + game.PIPE_GAP
-        out.append("[[bar 74bf2e %d %d]]" % (game.PIPE_WIDTH, round(game.FIELD_H - low) + 20))
-        for t, x in keys:
-            out.append("[[at %.2f %.1f %.1f]]" % (t, x, low))
+        track = [(step * 0.25, start_x - step * 0.25 * 120.0) for step in range(25)]
+        for color, w, h, dx, dy in game.pipe_parts(gap):
+            out.append("[[bar %s %d %d]]" % (color, round(w), round(h)))
+            for t, x in track:
+                out.append("[[at %.2f %.1f %.1f]]" % (t, x + dx, dy))
 
-    # 鸟：身体 + 嘴 + 眼睛，三块一起摆
-    bobbing = [(step * 0.125, 150.0 + math.sin(step * 0.3) * 42.0) for step in range(49)]
-    out.append("[[bar f7d51d %d %d]]" % (game.BIRD_W, game.BIRD_H))
-    for t, y in bobbing:
-        out.append("[[at %.2f %d %.1f]]" % (t, game.BIRD_X, y))
-    out.append("[[bar f5a623 9 6]]")
-    for t, y in bobbing:
-        out.append("[[at %.2f %d %.1f]]" % (t, game.BIRD_X + game.BIRD_W - 2, y + 7))
-    out.append("[[bar 3b3b3b 4 4]]")
-    for t, y in bobbing:
-        out.append("[[at %.2f %d %.1f]]" % (t, game.BIRD_X + 14, y + 4))
+    # 鸟：三块零件一起摆
+    sway = [(step * 0.125, 150.0 + math.sin(step * 0.3) * 42.0) for step in range(49)]
+    for color, w, h, dx, dy in game.bird_parts(0.0, tick=0):
+        out.append("[[bar %s %d %d]]" % (color, round(w), round(h)))
+        for t, y in sway:
+            out.append("[[at %.2f %.1f %.1f]]" % (t, game.BIRD_X + dx, y + dy))
 
     out.append("[[end]]")
     return out

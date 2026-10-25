@@ -130,52 +130,65 @@ BEAK = "f5a623"
 EYE = "3b3b3b"
 
 
-def frame(run):
-    """把这一局画成一个 `[[scene]]`，返回若干行标记。"""
-    bars = [
-        # 天空和远山：都超出画布，圆角落在外面
+def background():
+    """静止的背景：天空、云、地面。全部超出画布，圆角落在外面被裁掉。"""
+    return [
         (SKY, 700, 460, -80, -80),
-        # 云：三块不等长的圆角条，位置固定，不参与游戏
         (CLOUD, 96, 18, 70, 44),
         (CLOUD, 58, 14, 150, 38),
         (CLOUD, 80, 16, 330, 70),
         (CLOUD, 44, 12, 400, 62),
-        # 地面：一片沙 + 一条草边 + 一条深色分界
         (GROUND, 700, 96, -80, GROUND_Y - 6),
         (GRASS, 700, 6, -80, GROUND_Y - 6),
         (GROUND_LINE, 700, 4, -80, GROUND_Y + 14),
     ]
 
-    for pipe in run["pipes"]:
-        top_h = max(0.0, pipe["gap"]) + 20
-        bottom_y = pipe["gap"] + PIPE_GAP
-        bottom_h = max(20.0, FIELD_H - bottom_y + 20)
-        # 管身
-        bars.append((PIPE, PIPE_WIDTH, top_h, pipe["x"], -20))
-        bars.append((PIPE, PIPE_WIDTH, bottom_h, pipe["x"], bottom_y))
-        # 左侧高光，让管子看起来不是一块纯色
-        bars.append((PIPE_LIGHT, 8, top_h, pipe["x"] + 8, -20))
-        bars.append((PIPE_LIGHT, 8, bottom_h, pipe["x"] + 8, bottom_y))
-        # 管唇：比管身宽一圈，贴着缺口那一端
-        cap_top = pipe["gap"] - 14
-        if cap_top > 0:
-            bars.append((PIPE_DARK, PIPE_WIDTH + 10, 14, pipe["x"] - 5, cap_top))
-        bars.append((PIPE_DARK, PIPE_WIDTH + 10, 14, pipe["x"] - 5, bottom_y))
 
-    # 鸟：身体、翅膀、嘴、眼睛
-    y = run["y"]
-    wing = 0 if (run["tick"] // 2) % 2 == 0 else 4
-    bars += [
-        (BIRD, BIRD_W, BIRD_H, BIRD_X, y),
-        (BIRD_WING, 10, 6, BIRD_X + 4, y + 8 + wing),
-        (BEAK, 9, 6, BIRD_X + BIRD_W - 2, y + 7),
-        (EYE, 4, 4, BIRD_X + 14, y + 4),
+def pipe_parts(gap):
+    """一根水管的所有零件，坐标相对「水管左上角」。
+
+    ((颜色, 宽, 高, dx, dy), …) —— 调用方决定这根水管在哪。
+    """
+    top_h = max(0.0, gap) + 20
+    bottom_y = gap + PIPE_GAP
+    bottom_h = max(20.0, FIELD_H - bottom_y + 20)
+    cap_top = gap - 14
+    parts = [
+        (PIPE, PIPE_WIDTH, top_h, 0, -20),
+        (PIPE_LIGHT, 8, top_h, 8, -20),
+        (PIPE, PIPE_WIDTH, bottom_h, 0, bottom_y),
+        (PIPE_LIGHT, 8, bottom_h, 8, bottom_y),
+        (PIPE_DARK, PIPE_WIDTH + 10, 14, -5, bottom_y),
+    ]
+    if cap_top > 0:
+        parts.append((PIPE_DARK, PIPE_WIDTH + 10, 14, -5, cap_top))
+    return parts
+
+
+def bird_parts(y, tick=0):
+    """鸟的零件，坐标相对「鸟的左上角」。翅膀每两格动一下。"""
+    wing = 0 if (tick // 2) % 2 == 0 else 4
+    return [
+        (BIRD, BIRD_W, BIRD_H, 0, 0),
+        (BIRD_WING, 10, 6, 4, 8 + wing),
+        (BEAK, 9, 6, BIRD_W - 2, 7),
+        (EYE, 4, 4, 14, 4),
     ]
 
+
+def frame(run):
+    """把这一局画成一个 `[[scene]]`，返回若干行标记。"""
+    bars = list(background())
+    for pipe in run["pipes"]:
+        for color, w, h, dx, dy in pipe_parts(pipe["gap"]):
+            bars.append((color, w, h, pipe["x"] + dx, dy))
+    for color, w, h, dx, dy in bird_parts(run["y"], run["tick"]):
+        bars.append((color, w, h, BIRD_X + dx, run["y"] + dy))
+
     out = ["[[scene %dx%d 0.01]]" % (FIELD_W, FIELD_H)]
-    for color, w, h, x, y2 in bars:
+    for color, w, h, x, y in bars:
         out.append("[[bar %s %d %d]]" % (color, round(w), round(h)))
-        out.append("[[at 0 %.1f %.1f]]" % (x, y2))
+        out.append("[[at 0 %.1f %.1f]]" % (x, y))
     out.append("[[end]]")
     return out
 
