@@ -1,253 +1,204 @@
-# 部署与运维手册
+# 部署与运维
 
-目标环境：一台 Linux 服务器（systemd 232+），Python 3.9+。
-客户端环境：Windows（当前只提供 `x86_64-pc-windows-msvc` 构建）。
+目标：一台 Linux 服务器（systemd），从零到四个站在跑。
+
+每一步后面都写了**应该看到什么**，对不上就停在那一节排查。
 
 ---
 
 ## 1. 服务器上长什么样
 
 ```
-/srv/nac/                        主站（名字 home）
-├─ bin/contentd             内容服务（strip + LTO）
-├─ bin/publish              发布工具（运营台的「发布」按钮会调它）
-├─ bin/probe                探针：健康检查与排障
-├─ site/                    主站页面
-├─ admin/site/              运营台页面（同样的路径规则）
-├─ data/                    主站：current / gen/ / state/ / appdata/
-├─ admin/data/              运营台自己的代与会话（与公开站隔离）
-├─ archive/                 原图归档（用 --archive 时才有）
-├─ data/access.jsonl        访问日志（配 --log 时写）
-└─ sites.json               站点注册表：客户端按名字找站时用它回答
+/srv/nac/                      主站，名字 nac.local
+├─ bin/contentd                内容服务
+├─ bin/publish                 发布工具（运营台的「发布」按钮会调它）
+├─ bin/probe                   探针：自检与排障
+├─ site/                       主站页面源码
+├─ data/                       主站数据：current / gen/ / state/ / appdata/
+├─ admin/{site,data}/          运营台（自己的站点与数据，与公开站隔离）
+├─ archive/                    原图归档（用 --archive 时才有）
+└─ sites.json                  站点注册表：客户端按名字找站时照它回答
 
-/srv/nac-shop/                   其它站各占一个同级目录（名字见注册表）
-├─ site/                    shop 的页面
-├─ data/                    shop 自己的代、会话、数据库
-└─ archive/
+/srv/nac-shop.nac.local/       其它站各占一个同级目录，名字见注册表
+/srv/nac-iris.out/             ├─ site/     页面源码
+/srv/nac-EX_MYTH/              ├─ data/     自己的代、会话、数据库
+                               └─ archive/
 ```
 
-每个站是**一个独立进程**：自己的端口、自己的 `data/`、自己的数据库。它们互相看不见
-对方的数据，唯一的联系是 `sites.json` 里那几行地址。
+**每站一个进程**：自己的端口、自己的 `data/`、自己的数据库、自己的沙箱。
+它们互相看不见对方的数据，唯一的联系是 `sites.json` 里那几行地址。
 
-**可再生**：`data/gen/`、`data/state/`、`admin/data/gen/`。
-**要备份**：`site/`、`admin/site/`、`data/appdata/`、`archive/`、`sites.json`，
-以及每个额外站点的 `site/` 与 `data/appdata/`。
+**可再生**：`data/gen/`、`data/state/`、各站的 `data/gen/`。
+**要备份**：各站的 `site/`、`data/appdata/`、`archive/`，以及 `sites.json`。
 
 ## 2. 端口与身份
 
-| 服务 | 端口 | 绑定 | 用户 | 说明 |
+| 服务 | 端口 | 绑定 | 用户 | 是什么 |
 |---|---|---|---|---|
-| `nac-contentd` | 7000 | `127.0.0.1` 或 `0.0.0.0` | `nac-public` | 主站（`--name home`） |
-| `nac-console` | 7001 | `127.0.0.1` | `nac-console` | 运营台，只能是回环 |
+| `nac-contentd` | 7000 | `0.0.0.0` 或 `127.0.0.1` | `nac-public` | 主站（`--name nac.local`） |
+| `nac-console` | 7001 | 只 `127.0.0.1` | `nac-console` | 运营台 |
 | `nac-contentd-<名字>` | 7002 起 | 抄主站的 `--bind` | `nac-public` | 其它站，一站一个进程 |
 
-加站点用 `deploy/add-site.sh`；端口默认从 7002 往上找空的。
-
-## 3. 安装
+## 3. 装
 
 ### 3.1 一条命令（推荐）
 
 ```bash
-git clone git@github.com:Six-Fifteenths/Nac.git && cd Nac
+# 先把二进制编出来（服务器上需要 gcc 和 rust 工具链）
 cargo build --release
-sudo ./deploy/install.sh
+
+sudo ./deploy/install.sh                 # 公开站只绑回环
+sudo ./deploy/install.sh --bind-public   # 公开站绑 0.0.0.0（会暴露服务器 IP）
 ```
 
-`install.sh` 做的事（幂等，可以反复跑）：
+它会：建用户组与目录 → 生成自签证书与 pin → 装二进制 → 发布主站与运营台
+→ 写 `sites.json` → 装 systemd 单元 → 自检。
 
-1. 建 `nac-share` 组与 `nac-public` / `nac-console` 两个 `nologin` 用户
-2. 装 `contentd`、`publish`、`probe` 到 `<dest>/bin`
-3. 生成自签证书与 pin：`/etc/ssl/nac/public.{crt,key,pin}`（CN/SAN 取 `NAC_DOMAIN`，默认 `nac.local`）
-4. 同步 `site/` → `<dest>/site`、`admin/site/` → `<dest>/admin/site`（`--keep-site` 时保留现有）
-5. 以各自用户发布两套站点（公开站带 `--archive`）
-6. 把 `deploy/*.service` 里的 `/srv/nac` 换成 `--dest` 后装进 `/etc/systemd/system`
-7. 安装健康检查/每日备份的 unit 与 timer
-8. `systemctl enable` + `restart`，启动 timer
-9. 自检：`is-active`、`ss -ltnp`、`probe --tls-pin-file … health`
-
-参数：
-
-| 参数 | 默认 | 说明 |
-|---|---|---|
-| `--dest` | `/srv/nac` | 安装目录 |
-| `--public-user` | `nac-public` | 公开站运行用户 |
-| `--console-user` | `nac-console` | 运营台用户（必须与公开用户不同）|
-| `--group` | `nac-share` | 公开数据共享组 |
-| `--from` | `target/release` | 二进制来源 |
-| `--keep-site` | 关 | 保留现有 `site/` 与 `admin/site/`，**不从仓库覆盖** |
-| `--bind-public` | 关 | 公开站改绑 `0.0.0.0`，**会暴露服务器 IP** |
-
-> ⚠️ 不带 `--keep-site` 会用仓库里的 `site/` 覆盖服务器上的页面。
-> 在服务器上改过页面的，先备份或加这个参数。
+**应该看到**：最后几行是 `systemctl is-active` 显示 `active`，
+`ss -ltnp` 里有 `127.0.0.1:7000` 和 `127.0.0.1:7001`，`probe` 自检通过。
 
 ### 3.2 手工步骤（脚本看不懂时对照）
 
 ```bash
-# 用户与组（每个用户一个同名组，两者都加进 nac-share）
-groupadd -r nac-share
-groupadd -r nac-public  && useradd -r -s /usr/sbin/nologin -M -g nac-public  -G nac-share nac-public
-groupadd -r nac-console && useradd -r -s /usr/sbin/nologin -M -g nac-console -G nac-share nac-console
+# 用户与组：每个用户一个同名组，两者都加进 nac-share
+groupadd -r nac-public; useradd -r -s /usr/sbin/nologin -g nac-public -G nac-share nac-public
 
 # 目录
-install -d -m 0755 -o root -g root          /srv/nac/bin
-install -d -m 0750 -o root -g nac-share     /srv/nac
-install -d -m 0700 -o nac-console -g nac-console /srv/nac/admin
-install -d -m 2770 -o nac-public -g nac-share    /srv/nac/data /srv/nac/data/state \
-    /srv/nac/data/appdata /srv/nac/archive
+install -d -o root -g nac-share -m 0750 /srv/nac
+install -d -o root -g root -m 0755 /srv/nac/bin
+install -d -o nac-public -g nac-share -m 2770 /srv/nac/{data,data/state,data/appdata,archive}
 
-# 二进制
-install -m 0755 -o root -g root target/release/{contentd,publish,probe} /srv/nac/bin/
+# 证书与 pin（一张证书服务所有站）
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 3650 \
+    -subj "/CN=nac.local" -addext "subjectAltName=DNS:nac.local" \
+    -keyout /etc/ssl/nac/public.key -out /etc/ssl/nac/public.crt
+openssl x509 -in /etc/ssl/nac/public.crt -outform der | sha256sum | awk '{print $1}' \
+    > /etc/ssl/nac/public.pin
 
-# 页面与首次发布
-cp -r site /srv/nac/site && chown -R root:nac-share /srv/nac/site
-cp -r admin/site /srv/nac/admin/site && chown -R nac-console:nac-console /srv/nac/admin
-runuser -u nac-public  -- /srv/nac/bin/publish --site /srv/nac/site --data /srv/nac/data --archive /srv/nac/archive
-runuser -u nac-console -- /srv/nac/bin/publish --site /srv/nac/admin/site --data /srv/nac/admin/data
+# 二进制 + 源码 + 首次发布
+install -m 0755 target/release/{contentd,publish,probe} /srv/nac/bin/
+cp -r site /srv/nac/site
+runuser -u nac-public -- /srv/nac/bin/publish --site /srv/nac/site --data /srv/nac/data
 ```
 
 ## 4. 公开站要不要绑 0.0.0.0
 
-`install.sh` 默认绑 `127.0.0.1`，也就是**外人根本连不上**——只有走 SSH 隧道或本机能访问。
-
-要让读者直接访问，必须二选一：
+不绑就只有本机能连（配合 SSH 隧道用）。绑了客户端才能直连，但服务器 IP 一定暴露。
 
 ```bash
-# A. 改 unit（推荐：显式、看得见）
 sed -i 's#--bind 127.0.0.1#--bind 0.0.0.0#' /etc/systemd/system/nac-contentd.service
 systemctl daemon-reload && systemctl restart nac-contentd
-
-# B. 或重跑安装脚本
-sudo ./deploy/install.sh --bind-public
 ```
 
-两种都要自己**开防火墙端口**：
-
-```bash
-ufw allow 7000/tcp        # 或 firewalld 的等价命令
-```
-
-代价：客户端直连意味着**你的服务器 IP 对每个访客可见**。
-这是当前传输层的取舍，不是 bug。
-
-## 5. 加一个站点
+## 5. 加一个站
 
 ```bash
 cd /root/Nac
-./deploy/add-site.sh shop --site site-shop --port 7002 --host 199.7.140.217
+./deploy/add-site.sh iris.out --site site-iris --port 7003 --host 199.7.140.217
 ```
 
-脚本是幂等的：再跑一次就是更新那个站。它依次做：
+脚本是幂等的：再跑一次就是更新那个站。它依次做四件事：
 
 | 步骤 | 位置 |
 |---|---|
-| 建目录 | `/srv/nac-shop/{site,data,archive}`，属 `nac-public:nac-share`、2770 |
-| 发布 | `/srv/nac-shop/data/gen/<代数>`，由 `publish` 生成 |
-| 装 unit | `/etc/systemd/system/nac-contentd-shop.service` |
+| 建目录 | `/srv/nac-iris.out/{site,data,archive}`，属 `nac-public:nac-share`、2770 |
+| 发布 | `/srv/nac-iris.out/data/gen/<代数>` |
+| 装 unit | `/etc/systemd/system/nac-contentd-iris.out.service` |
 | 登记 | `/srv/nac/sites.json` 里一条 |
 
 绑定地址不传就抄主站 unit 里的 `--bind`，端口不传就从 7002 往上找空的。
+名字允许字母、数字、点、连字符、下划线 —— `EX_MYTH` 这种也行。
+
+**应该看到**：`自检` 那行打印 `version 5  site iris.out`。
 
 `sites.json` 最终长这样：
 
 ```json
 {
-  "home": {"host": "199.7.140.217", "port": 7000, "tls": true, "title": "主站"},
-  "shop": {"host": "199.7.140.217", "port": 7002, "tls": true, "title": "小器物"}
+  "nac.local":      {"host": "199.7.140.217", "port": 7000, "tls": true, "title": "主站"},
+  "shop.nac.local": {"host": "199.7.140.217", "port": 7002, "tls": true, "title": "小器物"},
+  "iris.out":       {"host": "199.7.140.217", "port": 7003, "tls": true, "title": "iris.out"},
+  "EX_MYTH":        {"host": "199.7.140.217", "port": 7004, "tls": true, "title": "EX_MYTH"}
 }
 ```
 
-**主站自己也必须带 `--name` 和 `--registry`**，否则它答不出"别的站在哪"。
-`install.sh` 会自动写好；手工装的话别漏了这两行：
+⚠️ **主站自己也必须带 `--name` 和 `--registry`**，否则它答不出"别的站在哪"。
+`install.sh` 会自动写好；手工装的话别漏：
 
 ```
-    --name home \
+    --name nac.local \
     --registry /srv/nac/sites.json \
 ```
 
-验收（三条都通才算好）：
-
-```bash
-systemctl is-active nac-contentd-shop
-/srv/nac/bin/probe --tls-pin-file /etc/ssl/nac/public.pin --addr 199.7.140.217:7000 resolve shop
-/srv/nac/bin/probe --tls-pin-file /etc/ssl/nac/public.pin --addr 199.7.140.217:7002 hello
-```
-
-防火墙要放行新端口（本例 7002），否则客户端拿到了地址却连不上。
+⚠️ **防火墙要放行新端口**（本例 7003），否则客户端拿到了地址却连不上。
 
 ## 6. 升级
 
 ```bash
-cd /root/Nac
-git pull
+cd /root/Nac && git pull
 cargo build --release
-
-# 只换二进制 + 重启，不动页面、不动数据
-sudo install -m 0755 -o root -g root target/release/{contentd,publish,probe} /srv/nac/bin/
-sudo systemctl restart nac-contentd nac-console
+install -m 0755 target/release/{contentd,publish,probe} /srv/nac/bin/
+runuser -u nac-public -- /srv/nac/bin/publish --site /srv/nac/site --data /srv/nac/data
+systemctl restart nac-contentd
 ```
 
-注意：
+- 只改页面：**不用**换二进制，跑一次 `publish` 即可（发布完立刻生效，旧代还在磁盘上）
+- 改协议（版本号变了）：服务端和客户端必须一起升，否则一律回 `EMPTY`
+- 加站后想让新站也吃到新二进制：把上面那行 `install` 再跑一次，然后
+  `systemctl restart 'nac-contentd*'`
 
-- **不要**在没有 `--keep-site` 的情况下重跑 `install.sh`，那会用仓库版本覆盖线上页面
-- 协议有不兼容改动时（例如 v3 → v4），服务端与客户端要一起升级
-- 客户端是分发的产物，**重签证书后必须重发**
+**服务器上没装编译器**会看到 `failed to find tool "cc"`。装一下：
+
+```bash
+apt-get install -y gcc libc6-dev
+```
 
 ## 7. 日常运维
 
-| 事 | 怎么做 |
-|---|---|
-| 看访问 | `tail -f /srv/nac/data/access.jsonl`（JSONL，每行一次请求） |
-| 看页面错误 | `journalctl -u nac-contentd -n 50 --no-pager`（stderr 全在这儿） |
-| 手动发布 | `sudo -u nac-public /srv/nac/bin/publish --site /srv/nac/site --data /srv/nac/data` |
-| 健康检查 | `systemctl status nac-health.timer`；或直接 `probe --tls-pin-file /etc/ssl/nac/public.pin --addr 127.0.0.1:7000 health` |
-| 备份 | `systemctl status nac-backup.timer`；产物在 `/root/backups/nac`，保留 7 份 |
-| 恢复 | 解开 tgz 覆盖 `site/ admin/site/ data/appdata/ archive/`，再跑一次 publish |
+```bash
+systemctl status nac-contentd                # 主站状态
+journalctl -u nac-contentd -n 50             # 页面报错都在这（print 也在）
+systemctl restart nac-contentd               # 改完配置重启
+tail -f /srv/nac/data/access.jsonl           # 访问日志（一行一个 JSON）
+```
 
-`deploy/nac-backup.sh` 打包的是 `site admin/site data/appdata archive`——
-也就是**不可再生**的那部分。
+| 想做什么 | 怎么做 |
+|---|---|
+| 看某页为什么空 | `journalctl -u nac-contentd -n 50`，找 `[page 65206]` 那几行 |
+| 确认证书没换 | `cat /etc/ssl/nac/public.pin`，与客户端构建时用的比 |
+| 确认某站被认识 | `probe --tls-pin-file /etc/ssl/nac/public.pin --addr IP:7000 resolve 名字` |
+| 确认某站在跑 | `probe --tls-pin-file /etc/ssl/nac/public.pin --addr IP:端口 hello` |
 
 ## 8. 自检清单
 
-装完或改完，按顺序确认：
+部署完、每次改动后，按顺序过一遍：
 
 ```bash
-systemctl is-active nac-contentd nac-console      # 都应为 active
-systemctl show -p User --value nac-contentd       # 应为 nac-public
-systemctl show -p User --value nac-console        # 应为 nac-console
-ss -ltnp | grep -E ':700[0-9]'                    # 7001 必须只绑 127.0.0.1
-probe --tls-pin-file /etc/ssl/nac/public.pin --addr 127.0.0.1:7000 health   # 应输出 ok N
-probe --addr 127.0.0.1:7001 manifest               # 运营台应能列出页面
+systemctl is-active nac-contentd nac-console 'nac-contentd-*'
+ss -ltn | grep -E ':700[0-9]'
+/srv/nac/bin/probe --tls-pin-file /etc/ssl/nac/public.pin --addr 127.0.0.1:7000 health   # ok N
+timeout 3 openssl s_client -connect 199.7.140.217:7000 -servername nac.local </dev/null \
+    2>/dev/null | grep -c "BEGIN CERTIFICATE"                                            # TLS 握手通（输出 1）
 ```
 
-客户端侧：
-
-```bash
-viewer --routes-check     # 站点表解析正确（tls/plain/ssh 标记）
-viewer --selftest         # protocol: 4  site: <名字>，然后能取到清单与页面
-```
+客户端那边：地址栏写 `nac.local/`，再写一个别的站的名字，两个都要能打开。
 
 ## 9. 磁盘
 
-`/srv/nac` 本身很小（几 MB + 页面数据）。真正吃盘的是：
+占地方的主要是 `data/gen/`（每一代都复制全部素材）。默认保留 5 代，
+`publish` 会自动清旧的。图片多的时候 `archive/` 也会长起来。
 
-- `data/appdata/`——**没有配额**，留言板、上传、SQLite 都在这儿，需要自己盯
-- `data/access.jsonl`——只增不减，配 logrotate
-- 服务器上的 `target/`（编译产物）与容器镜像往往才是大头
+```bash
+du -sh /srv/nac*/data/gen /srv/nac/archive 2>/dev/null
+```
 
 ## 10. 回滚
 
-发布是逐代切换的，`data/gen/` 里保留着每一代：
-
 ```bash
-ls -1 /srv/nac/data/gen/          # 按名字排，名字是发布时的 unix 时间
-echo '<旧代名>' > /srv/nac/data/current   # 原子写请用临时文件 + mv
+ls /srv/nac/data/gen/                 # 看有哪些代
+echo <旧代数> > /srv/nac/data/current # 指回去
+systemctl restart nac-contentd
 ```
 
-正确做法：
-
-```bash
-cd /srv/nac/data
-printf '%s\n' '<旧代名>' > .current.tmp && mv .current.tmp current
-```
-
-`contentd` 每次请求都重读 `current`，所以**不用重启**。
+`current` 是个纯文本文件，写哪一代就服务哪一代；写错了重启回空响应，
+改回来即可。二进制回滚就是换回上一个 `contentd`。

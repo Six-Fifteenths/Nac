@@ -18,6 +18,16 @@
 `ssh -N -L 端口:主机:端口`。分发版不编译这段代码，所以普通用户拿到 exe 没有任何
 可以启动子进程的能力。
 
+**两种 exe 不要混**：
+
+| 文件 | 带内嵌站点表 | 能 `--site` 切站 | 用途 |
+|---|---|---|---|
+| `dist/NacViewer.exe` | 是 | 否 | 发给别人，单文件 |
+| `target/release/viewer.exe` | 否 | 是 | 自己用，读 `nac.routes` |
+
+崩溃时 GUI 版会弹一个标题为 `Nac` 的框（并把同样的文字写进
+`%TEMP%\nac-viewer-crash.txt`），不会静默消失。
+
 ## 2. 站点表与名字
 
 `nac.routes` 说明客户端一开始认识哪些站：
@@ -62,12 +72,14 @@ console     MTI3LjAuMC4xOjcwMDE=       plain ssh=root@example.test
 - **单中心**：一台机器上几个站，各自的 registry 都列全所有站
 - **节点**：A 只列 A、B；B 只列 B、C。从 A 能到 B，从 B 能到 C
 
+加站用 `deploy/add-site.sh`，不要手写 unit；它会把目录、发布、unit、注册表一次做完。
+
 排障用 `probe resolve` —— 问的正是客户端问的那句话：
 
 ```bash
 /srv/nac/bin/probe --tls-pin-file /etc/ssl/nac/public.pin \
-    --addr 199.7.140.217:7000 resolve shop
-# shop -> 199.7.140.217:7002  tls  小器物
+    --addr 199.7.140.217:7000 resolve iris.out
+# iris.out -> 199.7.140.217:7003  tls  iris.out
 ```
 
 注意：回答没有签名，所以服务器可以引荐任意地址。所有站点都是你自己的时候这没问题。
@@ -119,12 +131,16 @@ cargo build --release -p viewer
 - 嵌入式地址表**优先于**用户自己放的 `nac.routes`，所以别人劫持不了
 - 分发版的站点表里不要写 `console` 那一行
 
-本机验证：
+本机验证（必须从终端运行，GUI 构建的 stdout 无处可去）：
 
 ```bash
 ./target/release/viewer --routes-check      # 列出解析出的站点与加密方式
 ./target/release/viewer --selftest          # 连一次、拉清单、取一页、取一张图
 ```
+
+**再确认一遍**：内嵌表优先于用户自己放的 `nac.routes`。所以带内嵌编出来的 exe
+没法用 `--site 其它站` 切站 —— 要那样用得编不带内嵌的版本（这就是
+`target/release/viewer.exe` 与 `dist/NacViewer.exe` 的区别）。
 
 ## 6. 运营台
 
@@ -146,7 +162,7 @@ console MTI3LjAuMC4xOjcwMDE=  plain ssh=root@199.7.140.217
 ssh -N -L 7001:127.0.0.1:7001 root@199.7.140.217
 ```
 
-打开后地址栏输入 `console.nac.local/`（或直接输 `/`）。
+打开后地址栏输入 `console/`（或直接输 `/`）—— 名字是 `console`，不是 `console.nac.local`。
 
 ## 7. 权限与沙箱
 
@@ -178,31 +194,35 @@ sudo -u nac-public /srv/nac/bin/publish --site /srv/nac/site --data /srv/nac/dat
 
 ```bash
 cd /root/Nac
-./deploy/add-site.sh shop --site site-shop --port 7002 --host 199.7.140.217
+./deploy/add-site.sh iris.out --site site-iris --port 7003 --host 199.7.140.217
 ```
+
+名字就是你以后在地址栏里写的那个：`nac.local`、`shop.nac.local`、`iris.out`、
+`EX_MYTH` 都是合法写法。目录名会跟着变成 `/srv/nac-iris.out`。
 
 它做四件事，每一步都可以手工复现：
 
 | 步骤 | 结果 |
 |---|---|
-| 建目录 | `/srv/nac-shop/{site,data,archive}`，权限与公开站一致（2770 / setgid） |
-| 发布 | 以 `nac-public` 身份跑 `publish`，产出 `/srv/nac-shop/data/gen/<代数>` |
-| 装 unit | 由 `deploy/nac-contentd-site.service` 生成 `nac-contentd-shop.service`，沙箱与主站完全相同 |
+| 建目录 | `/srv/nac-iris.out/{site,data,archive}`，权限与公开站一致（2770 / setgid） |
+| 发布 | 以 `nac-public` 身份跑 `publish`，产出 `.../data/gen/<代数>` |
+| 装 unit | 由 `deploy/nac-contentd-site.service` 生成 `nac-contentd-iris.out.service` |
 | 登记 | 往 `/srv/nac/sites.json` 加一条，客户端立刻就能认出新站 |
 
-新站绑定的地址默认抄主站 unit 里的 `--bind`，避免"主站能连、新站连不上"。
+绑定地址不传就抄主站 unit 里的 `--bind`，端口不传就从 7002 往上找空的。
+别忘了在防火墙上放行新端口。
 
 验收：
 
 ```bash
-systemctl is-active nac-contentd-shop
+systemctl is-active nac-contentd-iris.out
 /srv/nac/bin/probe --tls-pin-file /etc/ssl/nac/public.pin \
-    --addr 199.7.140.217:7000 resolve shop      # 主站知道 shop 在哪
+    --addr 199.7.140.217:7000 resolve iris.out   # 主站知道它在哪
 /srv/nac/bin/probe --tls-pin-file /etc/ssl/nac/public.pin \
-    --addr 199.7.140.217:7002 hello             # 新站自报名字
+    --addr 199.7.140.217:7003 hello              # 新站自报名字
 ```
 
-然后在客户端地址栏写 `shop.nac.local/`。
+然后在客户端地址栏写 `iris.out/`。
 
 **每站一个进程**是有意的：两个站看不见对方的数据库、会话和文件，唯一的联系是
 注册表里那几行地址。

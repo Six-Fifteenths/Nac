@@ -25,6 +25,38 @@ nac.done()
 
 ---
 
+## 0. 五分钟写第一页
+
+```bash
+# 1. 在站点目录里放一个文件
+cat > site/hello.py <<'PY'
+# nac:title 你好
+# nac:path /hello
+
+import nac
+
+nac.h1("你好")
+nac.p("这一页是 ", nac.tt("site/hello.py"), "，一个普通的 Python 程序。")
+nac.p("现在是 ", nac.b(__import__("time").strftime("%H:%M:%S")), "。")
+PY
+
+# 2. 发布（会打印 "published <代数> (N pages, M images)"）
+./target/release/publish --site site --data data
+
+# 3. 打开（或用已经开着的客户端按 F5）
+./target/release/viewer
+```
+
+地址栏写 `nac.local/hello` 就能看到。改完再跑一次 `publish` 即可，客户端刷新一次就变。
+
+三个必须知道的点：
+
+1. **路径由文件名决定**，`# nac:path` 只是覆盖它
+2. **`import nac` 不用安装** —— 每代发布都会在 `scripts/` 里生成它
+3. **`print()` 不进页面**，只进服务端日志；要显示内容用 `nac.p()`
+
+---
+
 ## 1. 静态页、动态页、前缀页
 
 | | 静态页 | 动态页 | 前缀页 |
@@ -56,7 +88,7 @@ item_id = nac.path_arg("/hn/item/")     # "/hn/item/123" -> "123"
 
 前缀页也不能是静态页：预渲染的结果只有一份，没法按地址区分。
 
-## 1.5 支持文件：`_` 开头的都是素材
+### 1.1 支持文件：`_` 开头的都是素材
 
 站点目录里，**任何一段路径以 `_` 开头**的东西都不是页面，而是页面的素材：
 
@@ -90,7 +122,7 @@ with open(os.path.join("_data", "hn_seed.json"), encoding="utf-8") as fh:
 不在 `_` 目录里的非 `.py` 文件（`notes.txt`、`data.json`）也会被当作素材复制过去，
 不会被静默丢掉。
 
-## 1.6 `print()` 去哪了
+### 1.2 `print()` 去哪了
 
 `print()` 是调试工具，不该出现在页面里。所以 `nac.py` 把 `sys.stdout` 换成了
 stderr：**页面打印的每一行都进服务端日志**，和 traceback 放在一起，永远到不了
@@ -540,3 +572,38 @@ for line in lines:
 
 **体积**：一行 `[[at 8.70 442 6]]` 约 20 字节。7 层汉诺塔 127 步约 10 KB，
 低于页面 16 KB 的上限；再多就该减少关键帧，或者分几页。
+
+## 10. 页面出错时怎么查
+
+页面出问题**不会**在客户端显示原因（一律回空响应），因为原因可能包含服务器内部信息。
+它只写服务端日志：
+
+```bash
+journalctl -u nac-contentd -n 50        # 线上
+# 本地起 contentd 的话，看它的 stderr
+```
+
+日志里会看到类似 `[page 65206] Traceback (most recent call last): ...`。
+
+| 症状 | 多半是 |
+|---|---|
+| 客户说「页面空白」，日志里有 `Traceback` | 页面抛异常了，看最后一行的异常类型 |
+| 日志里 `timeout or wait failure` | 超过 2 秒。把计算挪到发布时（`# nac:static`），或减少工作量 |
+| 日志里 `SyntaxError` | **不该出现**：发布时用 `compile()` 检查过。出现说明是手工改了 `data/gen/` |
+| 页面 404，但文件在 | 路径被 `# nac:path` 改了；或目录首页不叫 `index.py` |
+| 前缀页全 404 | `# nac:match` 必须以 `/` 开头**并以 `/` 结尾** |
+| `ModuleNotFoundError` | 模块不在 `_lib/`（或其它 `_` 开头的目录）里；只有那里的文件会被带过去 |
+| 页面内容比预期少 | 超过 16 KB 会被判失败（整页回空），不是截断 |
+| `print()` 的东西不见了 | 正常：它进日志，不进页面 |
+| 表单提交后行为不对 | 前缀页的表单要用 `nac.hidden()` 带上「是哪一条」，见 §G |
+
+本地快速复现某一页（跳过协议，直接跑脚本）：
+
+```bash
+cd data/gen/<代数>/scripts
+NAC_INPUT='{"page":1,"path":"/hello","fields":{}}' \
+NAC_PATH=/hello NAC_DATA_DIR=/tmp/appdata \
+python -B 12345.py            # 文件名就是页号
+```
+
+stdout 就是页面内容，stderr 就是日志。
