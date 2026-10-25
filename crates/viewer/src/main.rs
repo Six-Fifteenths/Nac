@@ -29,6 +29,7 @@ fn main() -> eframe::Result<()> {
     let mut encode: Option<String> = None;
     let mut list_sites = false;
     let mut start_page: Option<u16> = None;
+    let mut start_path: Option<String> = None;
     let mut plaintext = false;
 
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -67,6 +68,14 @@ fn main() -> eframe::Result<()> {
                 }
             }
             "--selftest" => selftest = true,
+            // `--at /hn/item/12`: open a deep address, which a page number alone
+            // cannot express once one page answers a whole family of addresses.
+            "--at" => {
+                if let Some(v) = args.get(i + 1) {
+                    start_path = Some(v.clone());
+                    i += 1;
+                }
+            }
             "--plaintext" => plaintext = true,
             _ => {}
         }
@@ -163,7 +172,14 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         "nac",
         options,
-        Box::new(move |cc| Ok(Box::new(Viewer::new(cc, routes, site, start_page)))),
+        Box::new(move |cc| {
+            Ok(Box::new(Viewer::new(
+                cc,
+                routes,
+                site,
+                start_path.map(Target::Path).or(start_page.map(Target::Page)),
+            )))
+        }),
     )
 }
 
@@ -230,7 +246,7 @@ fn selftest_run(routes: &routes::Routes, site_name: &str) -> eframe::Result<()> 
                 );
             }
             if let Some(id) = entries.iter().map(|e| e.id).min() {
-                match client.page(id) {
+                match client.page(id, "") {
                     Ok(text) => {
                         let blocks = markup::parse(&text);
                         println!("page {id}: {} bytes, {} blocks", text.len(), blocks.len());
@@ -243,7 +259,7 @@ fn selftest_run(routes: &routes::Routes, site_name: &str) -> eframe::Result<()> 
                 Ok(bytes) => println!("image 1: {} bytes", bytes.len()),
                 Err(_) => println!("image 1: EMPTY"),
             }
-            match client.submit(7, vec![("name".to_string(), "selftest".to_string())]) {
+            match client.submit(7, vec![("name".to_string(), "selftest".to_string())], "") {
                 Ok((id, text)) => println!("submit 7 -> page {id}: {} bytes", text.len()),
                 Err(_) => println!("submit 7: EMPTY"),
             }
@@ -518,10 +534,47 @@ fn normalize_path(input: &str) -> Option<String> {
     Some(out)
 }
 
-fn resolve_path(entries: &[net::Entry], home: Option<u16>, path: &str) -> Option<u16> {
-    if let Some(entry) = entries.iter().find(|e| e.path == path) {
-        return Some(entry.id);
+/// Hands an external address to the system browser.
+///
+/// The URL comes from a page, so it is treated as untrusted: the markup layer
+/// already refused anything that is not http(s), and no shell is involved
+/// (`rundll32` / `xdg-open` / `open` receive the URL as a single argument), so
+/// there is nothing for a `&`, `|` or quote inside it to break out of.
+fn open_in_browser(url: &str) {
+    #[cfg(target_os = "windows")]
+    let launched = std::process::Command::new("rundll32")
+        .args(["url.dll,FileProtocolHandler", url])
+        .spawn();
+    #[cfg(target_os = "macos")]
+    let launched = std::process::Command::new("open").arg(url).spawn();
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let launched = std::process::Command::new("xdg-open").arg(url).spawn();
+    if let Err(err) = launched {
+        eprintln!("could not open {url}: {err}");
     }
+}
+
+/// Finds the page that answers `path`.
+///
+/// Exact addresses win. Failing that, a page may declare a prefix
+/// (`# nac:match /item/`) and answer everything under it; the longest declared
+/// prefix wins, so `/item/` and `/item/special/` can coexist.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Resolved {
+    pub id: u16,
+    /// The address the page should be told about. For an exact match this is the
+    /// entry's own path; for a prefix match it is the address actually asked for.
+    pub path: String,
+}
+
+fn resolve_address(entries: &[net::Entry], home: Option<u16>, path: &str) -> Option<Resolved> {
+    if let Some(entry) = entries.iter().find(|e| e.path == path) {
+        return Some(Resolved {
+            id: entry.id,
+            path: entry.path.clone(),
+        });
+    }
+    // A trailing slash and its absence should name the same directory page.
     let alt = if path.ends_with('/') {
         path.trim_end_matches('/').to_string()
     } else {
@@ -529,13 +582,35 @@ fn resolve_path(entries: &[net::Entry], home: Option<u16>, path: &str) -> Option
     };
     if !alt.is_empty() && alt != "/" {
         if let Some(entry) = entries.iter().find(|e| e.path == alt) {
-            return Some(entry.id);
+            return Some(Resolved {
+                id: entry.id,
+                path: path.to_string(),
+            });
         }
     }
+    let best = entries
+        .iter()
+        .filter_map(|e| e.matches.as_deref().map(|prefix| (e, prefix)))
+        .filter(|(_, prefix)| path.starts_with(prefix))
+        .max_by_key(|(_, prefix)| prefix.len());
+    if let Some((entry, _)) = best {
+        return Some(Resolved {
+            id: entry.id,
+            path: path.to_string(),
+        });
+    }
     if path == "/" {
-        return home;
+        return home.map(|id| Resolved {
+            id,
+            path: "/".to_string(),
+        });
     }
     None
+}
+
+#[cfg(test)]
+fn resolve_path(entries: &[net::Entry], home: Option<u16>, path: &str) -> Option<u16> {
+    resolve_address(entries, home, path).map(|r| r.id)
 }
 
 
@@ -576,6 +651,9 @@ struct Tab {
     focus_input: bool,
     saved_fields: HashMap<u16, HashMap<String, String>>,
     shown_path: Option<String>,
+    /// When the current page's `[[scene]]` timelines started. Reset on every
+    /// page load, so a reload replays the animation instead of resuming it.
+    scene_clock: Option<std::time::Instant>,
     target: Option<Target>,
     /// Set while a site name is being looked up: the path to open once it arrives.
     pending_path: Option<String>,
@@ -620,7 +698,7 @@ impl Viewer {
         cc: &eframe::CreationContext<'_>,
         routes: routes::Routes,
         site: String,
-        start_page: Option<u16>,
+        start_page: Option<Target>,
     ) -> Self {
         install_fonts(&cc.egui_ctx);
         cc.egui_ctx.set_visuals(egui::Visuals::light());
@@ -635,7 +713,7 @@ impl Viewer {
             pending_sync: false,
             last_title: String::new(),
         };
-        viewer.open_tab(site, start_page.map(Target::Page));
+        viewer.open_tab(site, start_page);
         viewer.addr_input = viewer.tab().address_text(&viewer.routes);
         viewer
     }
@@ -710,6 +788,7 @@ impl Tab {
             focus_input: false,
             saved_fields: HashMap::new(),
             shown_path: None,
+            scene_clock: None,
             target,
             pending_path: None,
             resolving: None,
@@ -932,20 +1011,20 @@ impl Tab {
         }
     }
 
-    fn resolve_path(&self, path: &str) -> Option<u16> {
-        resolve_path(&self.entries, self.home, path)
+    fn resolve_path(&self, path: &str) -> Option<Resolved> {
+        resolve_address(&self.entries, self.home, path)
     }
 
     fn open_path(&mut self, path: &str) {
         let path = normalize_path(path).unwrap_or_else(|| path.to_string());
         self.shown_path = Some(path.clone());
-        if let Some(id) = self.resolve_path(&path) {
+        if let Some(found) = self.resolve_path(&path) {
             self.failed = false;
             self.error.clear();
-            if self.page_id == Some(id) {
-                self.load(id);
+            if self.page_id == Some(found.id) {
+                self.load_at(found.id, found.path);
             } else {
-                self.navigate(id);
+                self.navigate_at(found.id, found.path);
             }
             return;
         }
@@ -957,10 +1036,11 @@ impl Tab {
                 if self.entries.iter().any(|e| e.id == id) {
                     self.failed = false;
                     self.error.clear();
+                    let shown = format!("/{id}");
                     if self.page_id == Some(id) {
-                        self.load(id);
+                        self.load_at(id, shown);
                     } else {
-                        self.navigate(id);
+                        self.navigate_at(id, shown);
                     }
                     return;
                 }
@@ -981,8 +1061,20 @@ impl Tab {
     }
 
     fn load(&mut self, id: u16) {
+        self.load_at(id, String::new());
+    }
+
+    /// Loads a page and tells it which address was asked for. An empty `path`
+    /// means "the page's own address", which is what a plain page-number request
+    /// means.
+    fn load_at(&mut self, id: u16, path: String) {
         self.save_fields();
-        self.shown_path = self.path_of(id).or_else(|| Some(format!("/{id}")));
+        let path = if path.is_empty() {
+            self.path_of(id).unwrap_or_else(|| format!("/{id}"))
+        } else {
+            path
+        };
+        self.shown_path = Some(path.clone());
         if !self.entries.iter().any(|e| e.id == id) {
             self.loading = false;
             self.page_id = Some(id);
@@ -990,7 +1082,7 @@ impl Tab {
             return;
         }
         self.loading = true;
-        self.fetcher.page(id);
+        self.fetcher.page(id, path);
     }
 
     fn accept_page(&mut self, id: u16, text: Option<String>) {
@@ -1021,23 +1113,36 @@ impl Tab {
             })
             .unwrap_or_default();
         self.page_id = Some(id);
-        self.shown_path = self.path_of(id).or_else(|| Some(format!("/{id}")));
+        // A redirect can land on the page that already answers the address we
+        // were on — a prefix page answering `/hn/item/12`. Keep that address in
+        // that case, or it would collapse to the page's own `/hn/item` and the
+        // next reload would have nothing to look up.
+        let address_still_fits = self
+            .shown_path
+            .as_deref()
+            .and_then(|path| self.resolve_path(path))
+            .map(|found| found.id == id)
+            .unwrap_or(false);
+        if !address_still_fits {
+            self.shown_path = self.path_of(id).or_else(|| Some(format!("/{id}")));
+        }
         self.fields = self.saved_fields.remove(&id).unwrap_or_default();
         self.form_target = None;
         self.failed = false;
         self.error.clear();
         self.scroll_top = true;
         self.focus_input = true;
+        // A new page starts its animations from zero.
+        self.scene_clock = None;
     }
 
-    /// The current location, if a page is actually showing. Uses the page number
-    /// rather than `shown_path`, because callers set the path *before* asking to
-    /// navigate and that would record the destination instead of the origin.
+    /// The current address, preferring what was actually asked for over the page's
+    /// own path — a page answering `/item/` was still reached at `/item/123`.
     fn place(&self) -> Option<Place> {
         let path = self
-            .page_id
-            .and_then(|id| self.path_of(id))
-            .or_else(|| self.shown_path.clone())?;
+            .shown_path
+            .clone()
+            .or_else(|| self.page_id.and_then(|id| self.path_of(id)))?;
         Some(Place {
             site: self.site.clone(),
             path,
@@ -1055,13 +1160,17 @@ impl Tab {
     }
 
     fn navigate(&mut self, target: u16) {
+        self.navigate_at(target, String::new());
+    }
+
+    fn navigate_at(&mut self, target: u16, path: String) {
         if let Some(current) = self.page_id {
-            if current != target {
+            if current != target || !path.is_empty() {
                 let from = self.place();
                 self.trail.record(from);
             }
         }
-        self.load(target);
+        self.load_at(target, path);
     }
 
     fn back(&mut self, routes: &routes::Routes) {
@@ -1102,7 +1211,14 @@ impl Tab {
         // start clean.
         self.saved_fields.remove(&target);
         self.loading = true;
-        self.fetcher.submit(target, fields);
+        // A form on a page that answers a prefix has to come back to the same
+        // address, or the handler will not know which item was submitted for.
+        let path = self
+            .shown_path
+            .clone()
+            .or_else(|| self.path_of(target))
+            .unwrap_or_default();
+        self.fetcher.submit(target, path, fields);
     }
 
     fn job(&self, parts: &[Inline], size: f32, color: Color32, family: FontFamily) -> LayoutJob {
@@ -1264,7 +1380,90 @@ impl Tab {
             match target {
                 LinkTarget::Page(id) => self.navigate(id),
                 LinkTarget::Path(path) => self.open_path(&path),
+                LinkTarget::Url(url) => open_in_browser(&url),
             }
+        }
+    }
+
+    /// Draws a `[[scene]]` and keeps the clock running while it has time left.
+    ///
+    /// The page lays out rectangles in its own coordinates; this only scales the
+    /// canvas to the window, walks each bar's keyframes with a smoothstep so
+    /// motion starts and stops gently, and asks for repaints until the timeline
+    /// is over. Clicking the canvas replays it.
+    fn render_scene(
+        &mut self,
+        ui: &mut egui::Ui,
+        width: f32,
+        height: f32,
+        seconds: f32,
+        bars: &[markup::SceneBar],
+    ) {
+        let available = ui.available_width().max(120.0);
+        let scale = (available / width).min(1.6).max(0.2);
+        let size = egui::vec2(width * scale, height * scale);
+        let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+        if response.clicked() {
+            self.scene_clock = Some(std::time::Instant::now());
+        }
+        let started = *self.scene_clock.get_or_insert_with(std::time::Instant::now);
+        let elapsed = started.elapsed().as_secs_f32();
+
+        let painter = ui.painter_at(rect);
+        painter.rect_filled(
+            rect,
+            egui::CornerRadius::same(8),
+            egui::Color32::from_rgb(248, 248, 250),
+        );
+        painter.rect_stroke(
+            rect,
+            egui::CornerRadius::same(8),
+            egui::Stroke::new(1.0, egui::Color32::from_rgb(228, 228, 234)),
+            egui::StrokeKind::Inside,
+        );
+
+        let look = |bar: &markup::SceneBar, t: f32| -> Option<(f32, f32)> {
+            let keys = &bar.keys;
+            if keys.is_empty() {
+                return None;
+            }
+            if t <= keys[0].0 {
+                return Some((keys[0].1, keys[0].2));
+            }
+            let last = keys[keys.len() - 1];
+            if t >= last.0 {
+                return Some((last.1, last.2));
+            }
+            for pair in keys.windows(2) {
+                let (t0, x0, y0) = pair[0];
+                let (t1, x1, y1) = pair[1];
+                if t >= t0 && t <= t1 {
+                    let span = (t1 - t0).max(f32::EPSILON);
+                    let u = (t - t0) / span;
+                    let eased = u * u * (3.0 - 2.0 * u);
+                    return Some((x0 + (x1 - x0) * eased, y0 + (y1 - y0) * eased));
+                }
+            }
+            Some((last.1, last.2))
+        };
+
+        for bar in bars {
+            let Some((x, y)) = look(bar, elapsed) else {
+                continue;
+            };
+            let bar_rect = egui::Rect::from_min_size(
+                egui::pos2(rect.left() + x * scale, rect.top() + y * scale),
+                egui::vec2(bar.width * scale, bar.height * scale),
+            );
+            painter.rect_filled(
+                bar_rect,
+                egui::CornerRadius::same((bar.height * scale * 0.35) as u8),
+                egui::Color32::from_rgb(bar.color[0], bar.color[1], bar.color[2]),
+            );
+        }
+
+        if elapsed < seconds.max(0.0) {
+            ui.ctx().request_repaint();
         }
     }
 
@@ -1451,6 +1650,7 @@ impl Tab {
                         match target {
                             LinkTarget::Page(id) => self.navigate(id),
                             LinkTarget::Path(path) => self.open_path(&path),
+                            LinkTarget::Url(url) => open_in_browser(&url),
                         }
                     }
                     ui.add_space(4.0);
@@ -1491,6 +1691,17 @@ impl Tab {
                         }
                     }
                     ui.add_space(4.0);
+                }
+                Block::Hidden { name, value } => {
+                    self.fields.insert(name.clone(), value.clone());
+                }
+                Block::Scene {
+                    width,
+                    height,
+                    seconds,
+                    bars,
+                } => {
+                    self.render_scene(ui, width, height, seconds, &bars);
                 }
                 Block::Button { label } => {
                     if ui
@@ -1982,8 +2193,8 @@ impl eframe::App for Viewer {
 #[cfg(test)]
 mod tests {
     use super::{
-        active_after_close, net, normalize_path, parse_address, resolve_path, routes,
-        stash_fields, Address, Place, Trail,
+        active_after_close, net, normalize_path, parse_address, resolve_address, resolve_path,
+        routes, stash_fields, Address, Place, Trail,
     };
     use std::collections::HashMap;
 
@@ -2030,6 +2241,18 @@ mod tests {
             hash: 0,
             title: String::new(),
             path: path.to_string(),
+            matches: None,
+        }
+    }
+
+    fn dynamic_entry(id: u16, path: &str, matches: &str) -> net::Entry {
+        net::Entry {
+            id,
+            dynamic: true,
+            hash: 0,
+            title: String::new(),
+            path: path.to_string(),
+            matches: Some(matches.to_string()),
         }
     }
 
@@ -2225,6 +2448,33 @@ mod tests {
         assert_eq!(active_after_close(3, 0, 2), 0);
         // Two tabs, close the other one.
         assert_eq!(active_after_close(2, 1, 0), 0);
+    }
+
+    #[test]
+    fn a_prefix_page_answers_the_whole_family() {
+        let entries = vec![
+            entry(1, "/"),
+            dynamic_entry(2, "/item/", "/item/"),
+            dynamic_entry(3, "/item/special/", "/item/special/"),
+        ];
+        // Exact match keeps naming the page's own address.
+        assert_eq!(
+            resolve_address(&entries, Some(1), "/item/").map(|r| (r.id, r.path)),
+            Some((2, "/item/".to_string()))
+        );
+        // Anything under the prefix goes to the same page, and the page is told
+        // which address was asked for.
+        assert_eq!(
+            resolve_address(&entries, Some(1), "/item/123").map(|r| (r.id, r.path)),
+            Some((2, "/item/123".to_string()))
+        );
+        // The longest declared prefix wins, so a more specific page can exist.
+        assert_eq!(
+            resolve_address(&entries, Some(1), "/item/special/9").map(|r| r.id),
+            Some(3)
+        );
+        // No prefix matches: still a 404.
+        assert_eq!(resolve_address(&entries, Some(1), "/nope"), None);
     }
 
     #[test]

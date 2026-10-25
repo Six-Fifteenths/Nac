@@ -20,6 +20,19 @@ pub enum Inline {
 pub enum LinkTarget {
     Page(u16),
     Path(String),
+    /// `[[url:https://…|文字]]` opens in the system browser. Only http(s) is
+    /// accepted, so a page cannot hand the shell a `file:` or custom scheme.
+    Url(String),
+}
+
+/// One rectangle in a `[[scene]]`, with its keyframes in scene coordinates.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SceneBar {
+    pub color: [u8; 3],
+    pub width: f32,
+    pub height: f32,
+    /// `(t, x, y)`, sorted by `t`. Positions are the rectangle's top-left corner.
+    pub keys: Vec<(f32, f32, f32)>,
 }
 
 /// Severity of a `[[note]]` box.
@@ -90,6 +103,20 @@ pub enum Block {
     Checkbox {
         name: String,
         label: String,
+    },
+    /// `[[scene WxH seconds]] … [[end]]`: a timeline of rectangles the client
+    /// interpolates. The page decides what moves and when; nothing here is
+    /// specific to any one demo.
+    Scene {
+        width: f32,
+        height: f32,
+        seconds: f32,
+        bars: Vec<SceneBar>,
+    },
+    /// `[[hidden name|value]]`: carries state the reader never sees.
+    Hidden {
+        name: String,
+        value: String,
     },
     Button {
         label: String,
@@ -279,6 +306,10 @@ fn parse_one(lines: &[&str], i: &mut usize) -> Option<Block> {
         return parse_tabs(lines, i, inner_spec(rest));
     }
 
+    if let Some(rest) = t.strip_prefix("[[scene") {
+        return parse_scene(lines, i, inner_spec(rest));
+    }
+
     if let Some(rest) = t.strip_prefix("[[code") {
         let lang = inner_spec(rest);
         *i += 1;
@@ -312,6 +343,21 @@ fn parse_one(lines: &[&str], i: &mut usize) -> Option<Block> {
             name,
             label,
             secret: true,
+        });
+    }
+
+    if let Some(rest) = t.strip_prefix("[[hidden ") {
+        *i += 1;
+        let body = rest.trim_end_matches("]]");
+        return split_pipe(body).and_then(|(name, value)| {
+            let name = name.trim().to_string();
+            if name.is_empty() {
+                return None;
+            }
+            Some(Block::Hidden {
+                name,
+                value: value.trim().to_string(),
+            })
         });
     }
 
@@ -505,6 +551,87 @@ fn inner_spec(rest: &str) -> &str {
     rest.trim_end_matches(']').trim()
 }
 
+/// `[[scene 600x220 6.0]]`, then `[[bar rrggbb w h]]` and its `[[at t x y]]`
+/// lines, then `[[end]]`.
+///
+/// The page is free to emit as many bars and keys as fit; the client only reads
+/// times and positions, so the same block animates anything — a chart, a
+/// progress bar, falling blocks.
+fn parse_scene(lines: &[&str], i: &mut usize, spec: &str) -> Option<Block> {
+    let mut parts = spec.split_whitespace();
+    let size = parts.next()?;
+    let (w, h) = size.split_once('x')?;
+    let width = w.trim().parse::<f32>().ok()?;
+    let height = h.trim().parse::<f32>().ok()?;
+    if width <= 0.0 || height <= 0.0 {
+        return None;
+    }
+    let seconds = parts
+        .next()
+        .and_then(|v| v.parse::<f32>().ok())
+        .unwrap_or(1.0)
+        .max(0.0);
+
+    *i += 1;
+    let mut bars: Vec<SceneBar> = Vec::new();
+    while *i < lines.len() {
+        let line = lines[*i].trim();
+        *i += 1;
+        if line == "[[end]]" {
+            break;
+        }
+        if let Some(rest) = line.strip_prefix("[[bar ") {
+            let body = inner_spec(rest);
+            let mut f = body.split_whitespace();
+            let Some(color) = f.next().and_then(parse_color) else {
+                continue;
+            };
+            let bw = f.next().and_then(|v| v.parse::<f32>().ok()).unwrap_or(10.0);
+            let bh = f.next().and_then(|v| v.parse::<f32>().ok()).unwrap_or(10.0);
+            bars.push(SceneBar {
+                color,
+                width: bw,
+                height: bh,
+                keys: Vec::new(),
+            });
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("[[at ") {
+            let body = inner_spec(rest);
+            let mut f = body.split_whitespace();
+            let numbers: Vec<f32> = (0..3)
+                .map(|_| f.next().and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.0))
+                .collect();
+            if let Some(bar) = bars.last_mut() {
+                bar.keys.push((numbers[0], numbers[1], numbers[2]));
+            }
+        }
+    }
+
+    for bar in &mut bars {
+        bar.keys.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    }
+    if bars.is_empty() {
+        return None;
+    }
+    Some(Block::Scene {
+        width,
+        height,
+        seconds,
+        bars,
+    })
+}
+
+/// `c0392b` or `#c0392b`.
+fn parse_color(text: &str) -> Option<[u8; 3]> {
+    let hex = text.trim_start_matches('#');
+    if hex.len() != 6 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+    let byte = |at: usize| u8::from_str_radix(&hex[at..at + 2], 16).ok();
+    Some([byte(0)?, byte(2)?, byte(4)?])
+}
+
 fn cells(line: &str) -> Vec<Vec<Inline>> {
     let inner = line.trim();
     let inner = inner.strip_prefix('|').unwrap_or(inner);
@@ -637,6 +764,13 @@ fn bracket_link(inner: &str) -> Option<(LinkTarget, String)> {
         } else {
             format!("/{path}")
         })
+    } else if let Some(url) = raw.strip_prefix("url:") {
+        let url = url.trim();
+        let lower = url.to_ascii_lowercase();
+        if !(lower.starts_with("https://") || lower.starts_with("http://")) {
+            return None;
+        }
+        LinkTarget::Url(url.to_string())
     } else {
         LinkTarget::Page(raw.parse::<u16>().ok()?)
     };
@@ -756,6 +890,78 @@ mod tests {
         assert_eq!(images[0], (4, Some(2.0)));
         assert_eq!(images[1], (5, None));
         assert_eq!(images[2], (6, None));
+    }
+
+    #[test]
+    fn hidden_fields_carry_state_and_links_can_leave_the_site() {
+        let blocks = parse("[[hidden item|42]]\n[[hidden back|/hn/item/42]]\n");
+        let hidden: Vec<(&str, &str)> = blocks
+            .iter()
+            .filter_map(|b| match b {
+                Block::Hidden { name, value } => Some((name.as_str(), value.as_str())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(hidden, [("item", "42"), ("back", "/hn/item/42")]);
+
+        // Only http(s) addresses become outbound links; anything else stays text
+        // so a page cannot hand the shell a `file:` URL.
+        let parts = inlines("见 [[url:https://example.invalid/a?b=1&c=2|原文]]");
+        assert!(matches!(
+            &parts[1],
+            Inline::Link { target: LinkTarget::Url(url), .. } if url == "https://example.invalid/a?b=1&c=2"
+        ));
+        let hostile = inlines("[[url:file:///etc/passwd|偷看]]");
+        assert!(hostile.iter().all(|p| !matches!(p, Inline::Link { .. })));
+    }
+
+    #[test]
+    fn scenes_are_bars_with_keyframes() {
+        let src = "[[scene 640x120 2.5]]\n\
+                   [[bar 6b7280 8 90]]\n\
+                   [[at 0 100 30]]\n\
+                   [[bar #c0392b 40 12]]\n\
+                   [[at 0 60 78]]\n\
+                   [[at 1 60 6]]\n\
+                   [[at 2 300 78]]\n\
+                   [[end]]\n";
+        let blocks = parse(src);
+        match &blocks[0] {
+            Block::Scene { width, height, seconds, bars } => {
+                assert_eq!((*width, *height), (640.0, 120.0));
+                assert_eq!(*seconds, 2.5);
+                assert_eq!(bars.len(), 2);
+                assert_eq!(bars[0].color, [0x6b, 0x72, 0x80]);
+                assert_eq!(bars[1].color, [0xc0, 0x39, 0x2b]);
+                assert_eq!(bars[1].keys.len(), 3);
+                assert_eq!(bars[1].keys[1], (1.0, 60.0, 6.0));
+            }
+            other => panic!("期望场景，得到 {other:?}"),
+        }
+
+        // Keyframes are sorted, and a bar with no keys is still drawable (it just
+        // never moves), so a page can lay out a static backdrop.
+        let unsorted = parse("[[scene 10x10 1]]\n[[bar 000000 1 1]]\n[[at 2 0 0]]\n[[at 1 5 5]]\n[[end]]\n");
+        match &unsorted[0] {
+            Block::Scene { bars, .. } => {
+                assert_eq!(bars[0].keys[0].0, 1.0);
+                assert_eq!(bars[0].keys[1].0, 2.0);
+            }
+            other => panic!("期望场景，得到 {other:?}"),
+        }
+        // A bad size or colour must not take the page down: the block is simply
+        // not a scene, and the lines fall through as ordinary text.
+        for bad in [
+            "[[scene 0x10 1]]\n[[bar 000000 1 1]]\n[[end]]\n",
+            "[[scene 10x10 1]]\n[[bar nothex 1 1]]\n[[end]]\n",
+            "[[scene 10x10 1]]\n[[end]]\n",
+        ] {
+            let blocks = parse(bad);
+            assert!(
+                !blocks.iter().any(|b| matches!(b, Block::Scene { .. })),
+                "{bad:?} should not be a scene"
+            );
+        }
     }
 
     #[test]

@@ -14,8 +14,12 @@ use crate::routes::TlsMode;
 
 pub enum Job {
     Manifest,
-    Page(u16),
-    Submit(u16, Vec<(String, String)>),
+    Page { id: u16, path: String },
+    Submit {
+        id: u16,
+        path: String,
+        fields: Vec<(String, String)>,
+    },
     /// Ask the server we are on where another site lives.
     Resolve(String),
 }
@@ -59,7 +63,7 @@ impl Fetcher {
                         }
                         Msg::Manifest(manifest)
                     }
-                    Job::Page(id) => {
+                    Job::Page { id, path } => {
                         if let Some(entry) = entries.get(&id) {
                             if !entry.dynamic {
                                 if let Some((hash, text)) = static_cache.get(&id) {
@@ -73,7 +77,7 @@ impl Fetcher {
                                 }
                             }
                         }
-                        let text = client.page(id).ok();
+                        let text = client.page(id, &path).ok();
                         if let (Some(entry), Some(text)) = (entries.get(&id), &text) {
                             if !entry.dynamic {
                                 static_cache.insert(id, (entry.hash, text.clone()));
@@ -81,13 +85,15 @@ impl Fetcher {
                         }
                         Msg::Page { id, text }
                     }
-                    Job::Submit(id, fields) => match client.submit(id, fields) {
-                        Ok((id, text)) => Msg::Page {
-                            id,
-                            text: Some(text),
-                        },
-                        Err(_) => Msg::Page { id, text: None },
-                    },
+                    Job::Submit { id, path, fields } => {
+                        match client.submit(id, fields, &path) {
+                            Ok((id, text)) => Msg::Page {
+                                id,
+                                text: Some(text),
+                            },
+                            Err(_) => Msg::Page { id, text: None },
+                        }
+                    }
                     Job::Resolve(name) => {
                         let found = client.resolve(&name).ok();
                         Msg::Resolved { name, found }
@@ -116,12 +122,12 @@ impl Fetcher {
         self.send(Job::Manifest);
     }
 
-    pub fn page(&mut self, id: u16) {
-        self.send(Job::Page(id));
+    pub fn page(&mut self, id: u16, path: String) {
+        self.send(Job::Page { id, path });
     }
 
-    pub fn submit(&mut self, id: u16, fields: Vec<(String, String)>) {
-        self.send(Job::Submit(id, fields));
+    pub fn submit(&mut self, id: u16, path: String, fields: Vec<(String, String)>) {
+        self.send(Job::Submit { id, path, fields });
     }
 
     pub fn resolve(&mut self, name: String) {

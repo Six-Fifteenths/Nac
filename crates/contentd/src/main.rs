@@ -33,6 +33,9 @@ struct PageDef {
     file: String,
     #[serde(default)]
     path: Option<String>,
+    /// Prefix this page answers for, from `# nac:match /item/`.
+    #[serde(default, rename = "match")]
+    matches: Option<String>,
 }
 
 #[derive(serde::Deserialize, Clone)]
@@ -391,6 +394,7 @@ fn handle<S: Read + Write>(mut stream: S, state: Arc<State>) -> std::io::Result<
                         .clone()
                         .filter(|path| !path.is_empty())
                         .unwrap_or_else(|| format!("/{}", p.id)),
+                    matches: p.matches.clone(),
                 })
                 .collect();
             entries.sort_by_key(|e| e.id);
@@ -419,12 +423,14 @@ fn handle<S: Read + Write>(mut stream: S, state: Arc<State>) -> std::io::Result<
             None => (vec![ServerMsg::Empty], Some(*id), "image-unknown".to_string()),
         },
         Request::Page(id) => {
-            let out = serve_page(&state, &manifest, &gen_dir, &session, *id, &[], 0);
+            let out = serve_page(&state, &manifest, &gen_dir, &session, *id, &[], &msg.path, 0);
             let result = outcome(&out);
             (out, Some(*id), result)
         }
         Request::Submit(id, fields) => {
-            let out = serve_page(&state, &manifest, &gen_dir, &session, *id, fields, 0);
+            let out = serve_page(
+                &state, &manifest, &gen_dir, &session, *id, fields, &msg.path, 0,
+            );
             let result = outcome(&out);
             (out, Some(*id), result)
         }
@@ -492,6 +498,7 @@ fn serve_page(
     session: &SessionRef,
     id: u16,
     fields: &[(String, String)],
+    path: &str,
     depth: u8,
 ) -> Vec<ServerMsg> {
     let Some(def) = manifest.pages.iter().find(|p| p.id == id) else {
@@ -514,15 +521,25 @@ fn serve_page(
         return vec![ServerMsg::Empty];
     }
 
-    match run_python(state, gen_dir, &def.file, id, fields, session) {
+    match run_python(state, gen_dir, &def.file, id, fields, session, path) {
         Ok(PyOut::Body(bytes)) => {
             if bytes.len() > CHUNK {
                 return vec![ServerMsg::Empty];
             }
             vec![page_frame(id, &bytes, 0)]
         }
-        Ok(PyOut::Redirect(target)) => {
-            serve_page(state, manifest, gen_dir, session, target, &[], depth + 1)
+        Ok(PyOut::Redirect(target, target_path)) => {
+            let next = if target_path.is_empty() {
+                manifest
+                    .pages
+                    .iter()
+                    .find(|p| p.id == target)
+                    .and_then(|p| p.path.clone())
+                    .unwrap_or_default()
+            } else {
+                target_path
+            };
+            serve_page(state, manifest, gen_dir, session, target, &[], &next, depth + 1)
         }
         Err(_) => vec![ServerMsg::Empty],
     }
@@ -717,7 +734,7 @@ fn to_hex(bytes: &[u8]) -> String {
 
 enum PyOut {
     Body(Vec<u8>),
-    Redirect(u16),
+    Redirect(u16, String),
 }
 
 fn run_python(
@@ -727,17 +744,28 @@ fn run_python(
     page: u16,
     fields: &[(String, String)],
     session: &SessionRef,
+    path: &str,
 ) -> Result<PyOut, ()> {
     let script_path = gen_dir.join(script_rel);
     if !script_path.is_file() {
         return Err(());
     }
+    // Pages run with `scripts/` as the working directory, which is where publish
+    // puts their support material (`_lib/`, `_data/`, anything else). Two things
+    // follow for free: `import _lib.x` works, and `open("_data/seed.json")` works.
+    // Static pages are rendered the same way, so a page behaves identically
+    // whether it is pre-rendered or served live.
+    let scripts_dir = gen_dir.join("scripts");
+    let file_name = script_path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| script_rel.to_string());
 
     let mut field_map = serde_json::Map::new();
     for (k, v) in fields {
         field_map.insert(k.clone(), serde_json::Value::String(v.clone()));
     }
-    let payload = serde_json::json!({ "page": page, "fields": field_map }).to_string();
+    let payload = serde_json::json!({ "page": page, "path": path, "fields": field_map }).to_string();
 
     let data_dir = state.data.join("appdata");
     let _ = fs::create_dir_all(&data_dir);
@@ -745,11 +773,12 @@ fn run_python(
     let mut command = Command::new(&state.python);
     command
         .arg("-B")
-        .arg(script_rel)
-        .current_dir(gen_dir)
+        .arg(file_name)
+        .current_dir(scripts_dir)
         .env("PYTHONIOENCODING", "utf-8")
         .env("PYTHONUTF8", "1")
         .env("NAC_PAGE", page.to_string())
+        .env("NAC_PATH", path)
         .env("NAC_INPUT", payload)
         .env("NAC_SESSION_FILE", &session.file)
         .env("NAC_DATA_DIR", &data_dir)
@@ -800,14 +829,13 @@ fn run_python(
 
     let text = String::from_utf8(out).map_err(|_| ())?;
     if let Some(rest) = text.trim_start().strip_prefix("@@REDIRECT ") {
-        let id = rest
-            .lines()
-            .next()
-            .unwrap_or("")
-            .trim()
-            .parse::<u16>()
-            .map_err(|_| ())?;
-        return Ok(PyOut::Redirect(id));
+        let mut parts = rest.lines().next().unwrap_or("").split_whitespace();
+        let id = parts.next().and_then(|s| s.parse::<u16>().ok()).ok_or(())?;
+        // The address rides along so a prefix page still knows which member of
+        // its family it was asked for; without it `/item/42` would arrive as
+        // `/item` and the page would have nothing to look up.
+        let path = parts.next().unwrap_or("").to_string();
+        return Ok(PyOut::Redirect(id, path));
     }
 
     Ok(PyOut::Body(text.into_bytes()))

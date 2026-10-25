@@ -55,13 +55,22 @@ fn main() {
         })
         .unwrap_or([0u8; SESSION_LEN]);
 
+    // Optional `--path /address` so a page answering a prefix can be probed.
+    let mut path = String::new();
+    if let Some(i) = args.iter().position(|a| a == "--path") {
+        if i + 1 < args.len() {
+            path = args.remove(i + 1);
+            args.remove(i);
+        }
+    }
+
     let cmd = args.remove(0);
     let result: Result<(), String> = match cmd.as_str() {
-        "manifest" => call(&addr, ClientMsg { session, request: Request::Manifest })
+        "manifest" => call(&addr, ClientMsg { session, path: path.clone(), request: Request::Manifest })
             .and_then(|msgs| print_msgs(msgs, 0, false)),
-        "hello" => call(&addr, ClientMsg { session, request: Request::Hello })
+        "hello" => call(&addr, ClientMsg { session, path: path.clone(), request: Request::Hello })
             .and_then(|msgs| print_msgs(msgs, 0, false)),
-        "health" => call(&addr, ClientMsg { session, request: Request::Manifest })
+        "health" => call(&addr, ClientMsg { session, path: path.clone(), request: Request::Manifest })
             .and_then(|msgs| match msgs.first() {
                 Some(ServerMsg::Manifest { entries, .. }) if !entries.is_empty() => {
                     println!("ok {}", entries.len());
@@ -71,11 +80,11 @@ fn main() {
             }),
         "page" => {
             let id = parse_id(&args);
-            fetch(&addr, session, id, false)
+            fetch(&addr, session, id, false, &path)
         }
         "image" => {
             let id = parse_id(&args);
-            fetch(&addr, session, id, true)
+            fetch(&addr, session, id, true, &path)
         }
         "image-stream" => {
             let id = parse_id(&args);
@@ -92,6 +101,7 @@ fn main() {
                 &addr,
                 ClientMsg {
                     session,
+                    path: path.clone(),
                     request: Request::Submit(id, fields),
                 },
             )
@@ -150,7 +160,13 @@ fn call(addr: &str, msg: ClientMsg) -> Result<Vec<ServerMsg>, String> {
     Ok(out)
 }
 
-fn fetch(addr: &str, session: [u8; SESSION_LEN], id: u16, image: bool) -> Result<(), String> {
+fn fetch(
+    addr: &str,
+    session: [u8; SESSION_LEN],
+    id: u16,
+    image: bool,
+    path: &str,
+) -> Result<(), String> {
     let mut offset: u32 = 0;
     let mut body = Vec::new();
     loop {
@@ -159,7 +175,7 @@ fn fetch(addr: &str, session: [u8; SESSION_LEN], id: u16, image: bool) -> Result
         } else {
             Request::Page(id)
         };
-        let msgs = call(addr, ClientMsg { session, request: req })?;
+        let msgs = call(addr, ClientMsg { session, path: path.to_string(), request: req })?;
         match msgs.into_iter().next() {
             Some(ServerMsg::Page { total, data, .. }) | Some(ServerMsg::Image { total, data, .. }) => {
                 body.extend_from_slice(&data);
@@ -187,6 +203,7 @@ fn fetch_stream(addr: &str, session: [u8; SESSION_LEN], id: u16) -> Result<(), S
     let mut stream = connect(addr)?;
     let msg = ClientMsg {
         session,
+        path: String::new(),
         request: Request::ImageStream(id, 0),
     };
     stream.write_all(&encode_client(&msg)).map_err(|e| e.to_string())?;

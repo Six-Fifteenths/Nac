@@ -14,6 +14,8 @@ pub struct Entry {
     pub hash: u64,
     pub title: String,
     pub path: String,
+    /// Prefix this page answers for, e.g. `/item/`.
+    pub matches: Option<String>,
 }
 
 /// What a `Resolve` came back with.
@@ -39,7 +41,7 @@ impl Client {
         }
     }
 
-    fn open(&self, request: Request) -> Result<Box<dyn ReadWrite>, ()> {
+    fn open(&self, request: Request, path: &str) -> Result<Box<dyn ReadWrite>, ()> {
         let stream = TcpStream::connect(&self.addr).map_err(|_| ())?;
         stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
         stream.set_write_timeout(Some(Duration::from_secs(5))).ok();
@@ -47,20 +49,21 @@ impl Client {
 
         let msg = ClientMsg {
             session: self.session,
+            path: path.to_string(),
             request,
         };
         stream.write_all(&encode_client(&msg)).map_err(|_| ())?;
         Ok(stream)
     }
 
-    fn call(&mut self, request: Request) -> Result<ServerMsg, ()> {
-        let mut stream = self.open(request)?;
+    fn call(&mut self, request: Request, path: &str) -> Result<ServerMsg, ()> {
+        let mut stream = self.open(request, path)?;
         let frame = read_frame(&mut *stream)?;
         decode_server(&frame).ok_or(())
     }
 
     pub fn hello(&mut self) -> Result<(u16, String), ()> {
-        match self.call(Request::Hello)? {
+        match self.call(Request::Hello, "")? {
             ServerMsg::Hello { version, site } => Ok((version, site)),
             _ => Err(()),
         }
@@ -68,7 +71,7 @@ impl Client {
 
     /// Asks this server where another site lives. `None` means it does not know.
     pub fn resolve(&mut self, name: &str) -> Result<Found, ()> {
-        match self.call(Request::Resolve(name.to_string()))? {
+        match self.call(Request::Resolve(name.to_string()), "")? {
             ServerMsg::Resolved {
                 endpoint,
                 tls,
@@ -84,7 +87,7 @@ impl Client {
     }
 
     pub fn manifest(&mut self) -> Result<Vec<Entry>, ()> {
-        match self.call(Request::Manifest)? {
+        match self.call(Request::Manifest, "")? {
             ServerMsg::Manifest { session, entries } => {
                 self.session = session;
                 Ok(entries
@@ -95,6 +98,7 @@ impl Client {
                         hash: e.hash,
                         title: e.title,
                         path: e.path,
+                        matches: e.matches,
                     })
                     .collect())
             }
@@ -102,15 +106,20 @@ impl Client {
         }
     }
 
-    pub fn page(&mut self, id: u16) -> Result<String, ()> {
-        match self.call(Request::Page(id))? {
+    pub fn page(&mut self, id: u16, path: &str) -> Result<String, ()> {
+        match self.call(Request::Page(id), path)? {
             ServerMsg::Page { data, .. } => String::from_utf8(data).map_err(|_| ()),
             _ => Err(()),
         }
     }
 
-    pub fn submit(&mut self, id: u16, fields: Vec<(String, String)>) -> Result<(u16, String), ()> {
-        match self.call(Request::Submit(id, fields))? {
+    pub fn submit(
+        &mut self,
+        id: u16,
+        fields: Vec<(String, String)>,
+        path: &str,
+    ) -> Result<(u16, String), ()> {
+        match self.call(Request::Submit(id, fields), path)? {
             ServerMsg::Page { id, data, .. } => Ok((
                 id,
                 String::from_utf8(data).map_err(|_| ())?,
@@ -126,7 +135,7 @@ impl Client {
         let mut out = Vec::new();
         loop {
             let offset = out.len() as u32;
-            match self.call(Request::Image(id, offset))? {
+            match self.call(Request::Image(id, offset), "")? {
                 ServerMsg::Image { total, data, .. } => {
                     if data.is_empty() {
                         break;
@@ -143,7 +152,7 @@ impl Client {
     }
 
     pub fn image_stream(&mut self, id: u16) -> Result<Vec<u8>, ()> {
-        let mut stream = self.open(Request::ImageStream(id, 0))?;
+        let mut stream = self.open(Request::ImageStream(id, 0), "")?;
         let mut out = Vec::new();
         loop {
             let frame = read_frame(&mut stream)?;

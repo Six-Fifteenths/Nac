@@ -15,7 +15,7 @@ H. 请求        request fields field_of submitted checked page_id flash flashes
 I. 会话        session save_session session_get session_set session_update session_pop
 J. 数据        data_dir data_path read_json write_json update_json read_lines
                append_line counter db
-K. 输出        done flush
+K. 输出        done stop flush
 
 静态页与动态页
 --------------
@@ -38,6 +38,12 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 
+#: The channel the rendered page travels on. `print()` is a debugging tool, so it
+#: is pointed at stderr instead: whatever a page prints lands in the server log
+#: next to tracebacks, and can never leak into the page by accident.
+_content = sys.stdout
+sys.stdout = sys.stderr
+
 # --------------------------------------------------------------- A. 本代常量
 
 #: 本代所有页号，例如 (5488, 7488)
@@ -45,6 +51,9 @@ PAGES = @PAGES@
 
 #: 路径 -> 页号，例如 {"/": 5488}
 PATHS = @PATHS@
+
+#: 前缀 -> 页号：一个页面可以认领一整个地址族，例如 {"/item/": 37542}
+MATCHES = @MATCHES@
 
 #: 本代图片表：相对路径 -> (图片 id, 宽, 高)
 IMAGES = @IMAGES@
@@ -374,12 +383,31 @@ def _path_id(path):
     if page is None:
         alt = path.rstrip("/") if path.endswith("/") else path + "/"
         page = PATHS.get(alt)
+    if page is None:
+        # A prefix page answers every address under its prefix; longest wins,
+        # which is the same rule the client applies.
+        for prefix in sorted(MATCHES, key=len, reverse=True):
+            if path.startswith(prefix) and len(path) > len(prefix):
+                return MATCHES[prefix]
     return page
 
 
 def link_path(path, text):
-    """指向路径；目录用带尾斜杠的路径（如 /notes/）。"""
+    """指向路径；目录用带尾斜杠的路径（如 /notes/）。前缀页下的地址也认。"""
     _buf.append("[[path:%s|%s]]" % (_url(path), _cell(text)))
+
+
+def inline_path(path, text):
+    """指向路径的行内链接，返回字符串，塞进 p() / quote() / 单元格里用。"""
+    return "[[path:%s|%s]]" % (_url(path), _cell(text))
+
+
+def inline_url(url, text):
+    """指向站外地址的行内链接；点开交给系统浏览器。只接受 http(s)。"""
+    url = str(url).strip()
+    if not url.lower().startswith(("http://", "https://")):
+        return _cell(text)
+    return "[[url:%s|%s]]" % (_cell(url), _cell(text))
 
 
 def nav(*paths):
@@ -396,21 +424,32 @@ def home():
     link_path("/", "回首页")
 
 
-def redirect(page):
-    """立刻跳转到另一页；本页已拼好的内容会被丢弃。"""
+def _redirect(page, path):
+    """把「去第几页、用哪个地址」交给服务端，然后立刻停手。"""
     global _flushed
     page = int(page)
-    if page in PAGES:
-        _flushed = True
-        print("@@REDIRECT %d" % page)
-        raise SystemExit(0)
+    if page not in PAGES:
+        return
+    _flushed = True
+    _content.write("@@REDIRECT %d %s\n" % (page, _url(path) if path else ""))
+    _content.flush()
+    raise SystemExit(0)
+
+
+def redirect(page):
+    """立刻跳转到另一页；本页已拼好的内容会被丢弃。"""
+    _redirect(page, "")
 
 
 def redirect_path(path):
-    """按路径立刻跳转；路径不存在时什么也不做。"""
+    """按路径立刻跳转；路径不存在时什么也不做。
+
+    地址会跟着一起带过去，所以跳到 `/item/42` 时那一页从 `path()` 里仍然看得见
+    `/item/42`，而不是退化成它自己的 `/item`。
+    """
     page = _path_id(path)
     if page is not None:
-        redirect(page)
+        _redirect(page, path)
 
 
 def first_page():
@@ -466,6 +505,11 @@ def check(name, label=""):
     _buf.append("[[check %s|%s]]" % (name, label))
 
 
+def hidden(name, value):
+    """看不到的字段：跟着表单一起提交，用来记住「刚才是哪一条」。"""
+    _buf.append("[[hidden %s|%s]]" % (_cell(name), _cell(value)))
+
+
 def button(label):
     """提交按钮。一页里最后一个按钮决定提交目标，通常只放一个。"""
     _buf.append("[[button %s]]" % _cell(label))
@@ -474,8 +518,38 @@ def button(label):
 # ----------------------------------------------------------------- H. 请求
 
 def request():
-    """原始请求：{"page": 页号, "fields": {...}}。"""
+    """原始请求：{"page": 页号, "path": 地址, "fields": {...}}。"""
     return json.loads(os.environ.get("NAC_INPUT") or "{}")
+
+
+def path():
+    """本次请求的地址，例如 `/item/123`。
+
+    对普通页面来说它就是页面自己的路径；对声明了 `# nac:match /item/` 的页面，
+    它是用户实际输入的完整地址 —— 页面自己从里面取出想要的部分。
+    """
+    value = os.environ.get("NAC_PATH")
+    if value:
+        return value
+    return request().get("path") or ""
+
+
+def path_arg(prefix=None):
+    """地址里属于 `prefix` 之后的那一段，去掉首尾斜杠。
+
+        # 页面上声明了  # nac:match /item/
+        nac.path_arg("/item/")     # "/item/123" -> "123"
+
+    不给 prefix 时，去掉地址开头的一个斜杠。没有参数就返回空字符串。
+    """
+    value = path()
+    if prefix:
+        if not value.startswith(prefix):
+            return ""
+        value = value[len(prefix):]
+    else:
+        value = value.lstrip("/")
+    return value.strip("/")
 
 
 def fields():
@@ -740,13 +814,22 @@ def done():
     flush()
 
 
+def stop():
+    """这一页到此为止：已写的内容发出去，后面的代码不再执行。
+
+    页面是一个平铺的脚本，没有函数可以 `return`，所以提前收尾用这个。
+    """
+    flush()
+    raise SystemExit(0)
+
+
 def flush():
     global _flushed
     if _flushed:
         return
     _flushed = True
-    sys.stdout.write("\n".join(_buf) + "\n")
-    sys.stdout.flush()
+    _content.write("\n".join(_buf) + "\n")
+    _content.flush()
 
 
 atexit.register(flush)

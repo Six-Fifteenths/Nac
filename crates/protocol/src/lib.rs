@@ -7,7 +7,7 @@
 //! No magic bytes, no version field: both are fingerprints.
 //! Every decoder returns `None` on anything malformed, and never panics.
 
-pub const VERSION: u16 = 4;
+pub const VERSION: u16 = 5;
 pub const MAX_FRAME: usize = 32768;
 pub const CHUNK: usize = 16384;
 pub const SESSION_LEN: usize = 16;
@@ -29,6 +29,10 @@ pub struct ManifestEntry {
     pub title: String,
     /// Path shown to the reader, e.g. `/` or `/notes/`.
     pub path: String,
+    /// Prefix this page answers for, e.g. `/item/`. Present only on dynamic
+    /// pages that handle a whole family of addresses; the rest of the address is
+    /// handed to the page as `NAC_PATH`.
+    pub matches: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -48,6 +52,10 @@ pub enum Request {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClientMsg {
     pub session: [u8; SESSION_LEN],
+    /// The address the reader is asking for, e.g. `/item/123`. Empty when the
+    /// request does not depend on it. A page that answers a whole prefix needs
+    /// this to know which member of the family was asked for.
+    pub path: String,
     pub request: Request,
 }
 
@@ -98,6 +106,13 @@ fn frame(msg_type: u8, payload: &[u8]) -> Vec<u8> {
 pub fn encode_client(msg: &ClientMsg) -> Vec<u8> {
     let mut p = Vec::with_capacity(64);
     p.extend_from_slice(&msg.session);
+    // The address travels with every request: a page that answers a prefix needs
+    // to know which member of the family was asked for, and a form submission
+    // needs to come back to the same one.
+    let pb = msg.path.as_bytes();
+    let pl = pb.len().min(u16::MAX as usize) as u16;
+    p.extend_from_slice(&pl.to_be_bytes());
+    p.extend_from_slice(&pb[..pl as usize]);
 
     match &msg.request {
         Request::Hello => {
@@ -197,6 +212,10 @@ pub fn encode_server(msg: &ServerMsg) -> Vec<u8> {
                 let pl = pb.len().min(u16::MAX as usize) as u16;
                 p.extend_from_slice(&pl.to_be_bytes());
                 p.extend_from_slice(&pb[..pl as usize]);
+                let mb = e.matches.as_deref().unwrap_or("").as_bytes();
+                let ml = mb.len().min(u16::MAX as usize) as u16;
+                p.extend_from_slice(&ml.to_be_bytes());
+                p.extend_from_slice(&mb[..ml as usize]);
             }
             frame(T_MANIFEST, &p)
         }
@@ -297,6 +316,8 @@ pub fn decode_client(buf: &[u8]) -> Option<ClientMsg> {
     let (t, p) = split(buf)?;
     let mut r = Reader::new(p);
     let session: [u8; SESSION_LEN] = r.bytes(SESSION_LEN)?.try_into().ok()?;
+    let pl = r.u16()? as usize;
+    let path = r.string(pl)?;
 
     let request = match t {
         T_REQ => match r.u8()? {
@@ -364,7 +385,11 @@ pub fn decode_client(buf: &[u8]) -> Option<ClientMsg> {
         _ => return None,
     };
 
-    Some(ClientMsg { session, request })
+    Some(ClientMsg {
+        session,
+        path,
+        request,
+    })
 }
 
 pub fn decode_server(buf: &[u8]) -> Option<ServerMsg> {
@@ -411,12 +436,19 @@ pub fn decode_server(buf: &[u8]) -> Option<ServerMsg> {
                 let title = r.string(tl)?;
                 let pl = r.u16()? as usize;
                 let path = r.string(pl)?;
+                let ml = r.u16()? as usize;
+                let matches = if ml == 0 {
+                    None
+                } else {
+                    Some(r.string(ml)?)
+                };
                 entries.push(ManifestEntry {
                     id,
                     dynamic: flags & 1 == 1,
                     hash,
                     title,
                     path,
+                    matches,
                 });
             }
             if !r.done() {
@@ -495,6 +527,7 @@ mod tests {
         for req in cases {
             let msg = ClientMsg {
                 session: s(),
+                path: "/item/123".to_string(),
                 request: req.clone(),
             };
             let bytes = encode_client(&msg);
@@ -512,6 +545,7 @@ mod tests {
                 hash: 42,
                 title: "白塔".into(),
                 path: "/".into(),
+                matches: None,
             },
             ManifestEntry {
                 id: 7,
@@ -519,6 +553,7 @@ mod tests {
                 hash: 0,
                 title: String::new(),
                 path: "/guestbook".into(),
+                matches: Some("/item/".into()),
             },
         ];
         let msgs = vec![
@@ -561,6 +596,7 @@ mod tests {
     fn truncation_never_panics() {
         let msg = ClientMsg {
             session: s(),
+            path: String::new(),
             request: Request::Submit(7, vec![("a".into(), "b".into())]),
         };
         let bytes = encode_client(&msg);
@@ -578,6 +614,7 @@ mod tests {
     fn rejects_bad_lengths() {
         let msg = ClientMsg {
             session: s(),
+            path: String::new(),
             request: Request::Manifest,
         };
         let mut bytes = encode_client(&msg);

@@ -19,9 +19,9 @@ with nac.cols(3):
     nac.p("标题、列表、表格、提示框、折叠、页签、分栏，都能互相嵌套。")
     nac.link_path("/features", "功能一览")
     nac.col()
-    nac.h3("目录")
-    nac.p("像普通网站一样，用路径进入目录首页。")
-    nac.link_path("/notes/", "打开笔记目录")
+    nac.h3("会动的")
+    nac.p("汉诺塔：三根柱子、可选的层数、一次真正的移动模拟。")
+    nac.link_path("/hanoi", "搭起来看看")
     nac.col()
     nac.h3("互动")
     nac.p("表单、多行输入、下拉框、会话和 SQLite。")
@@ -59,6 +59,7 @@ nac.table(
     ("页面", "看什么"),
     [
         ("[[path:/features|功能一览]]", "所有排版能力，一页看完"),
+        ("[[path:/hanoi|汉诺塔]]", "服务端算 2ⁿ−1 步，客户端按关键帧动画"),
         ("[[path:/toolbox|文字工具箱]]", "把输入交给 Python 算，结果画成表格"),
         ("[[path:/guestbook|留言板]]", "SQLite、参数化查询、会话与跳转"),
         ("[[path:/interactive|互动实验]]", "表单、密码框、会话状态"),

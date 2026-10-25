@@ -1,0 +1,297 @@
+{
+  "_comment": "种子数据：第一次打开时灌进 hn.db。age 是相对当前的秒数，所以每次重灌都是新鲜的。",
+  "stories": [
+    {
+      "title": "Show HN: 我用一个自定义 TCP 协议写了个浏览器",
+      "url": "https://example.invalid/nac",
+      "by": "sfifteen",
+      "votes": 180,
+      "age": 1500,
+      "comments": [
+        {
+          "by": "tptacek",
+          "age": 1200,
+          "text": "协议本身没什么特别的，有意思的是它把「一页 = 一个程序」当成了唯一原语。所有别的功能都得从这个原语长出来。",
+          "replies": [
+            {
+              "by": "sfifteen",
+      "votes": 180,
+              "age": 900,
+              "text": "对，包括这次的排名算法 —— 它是页面里一个普通 Python 函数，不是一个服务。",
+              "replies": [
+                {
+                  "by": "jrockway",
+                  "age": 600,
+                  "text": "那状态放哪儿？",
+                  "replies": [
+                    {
+                      "by": "sfifteen",
+      "votes": 180,
+                      "age": 400,
+                      "text": "站点私有目录里的一个 SQLite 文件。跟写一个命令行工具没区别。"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "by": "cperciva",
+          "age": 1000,
+          "text": "每次请求起一个新进程？那冷启动怎么办。",
+          "replies": [
+            {
+              "by": "sfifteen",
+      "votes": 180,
+              "age": 800,
+              "text": "不怎么办，直接付。2 秒预算里 Python 启动占 20 毫秒，剩下的都是页面自己的。单机能扛住的东西比想象的多。"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "为什么我把缓存全删了，系统反而变快了",
+      "url": "https://example.invalid/no-cache",
+      "by": "patio11",
+      "votes": 96,
+      "age": 7200,
+      "comments": [
+        {
+          "by": "bcantrill",
+      "votes": 512,
+          "age": 5000,
+          "text": "「缓存」这个词被用得太宽了。作者删掉的其实是缓存失效逻辑，不是数据。",
+          "replies": [
+            {
+              "by": "patio11",
+      "votes": 96,
+              "age": 3000,
+              "text": "是的。数据的副本还在，删掉的是「什么时候该丢」这一整套猜测。"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "SQLite 在只读场景下比你想的快得多",
+      "url": "https://example.invalid/sqlite-readonly",
+      "by": "simonw",
+      "votes": 210,
+      "age": 14400
+    },
+    {
+      "title": "一个 40 行的排名算法跑了一个站 18 年",
+      "url": "https://example.invalid/gravity",
+      "by": "pg",
+      "votes": 342,
+      "age": 2600,
+      "comments": [
+        {
+          "by": "dang",
+          "age": 2000,
+          "text": "公式是 (points - 1) / (age_hours + 2)^1.8。改一个指数，整个站的性格就变了。",
+          "replies": [
+            {
+              "by": "jacquesm",
+              "age": 1500,
+              "text": "1.8 这个数不是推出来的，是试出来的。这一点很重要 —— 它是审美，不是物理。"
+            }
+          ]
+        },
+        {
+          "by": "pg",
+      "votes": 342,
+          "age": 1200,
+          "text": "难的不是公式，是决定不做别的事情。"
+        }
+      ]
+    },
+    {
+      "title": "问：有没有一种文本格式既能当代码又能当文档",
+      "url": "",
+      "text": "我一直在想，如果页面本身就是一个可执行文件，那文档和实现是不是就不该分家。有没有人认真做过这个？",
+      "by": "curious",
+      "votes": 48,
+      "age": 3000,
+      "comments": [
+        {
+          "by": "andy_bandi",
+          "age": 2400,
+          "text": "Literate programming 就是这个方向，Knuth 几十年就做过了。失败的从来不是格式，是工具链。",
+          "replies": [
+            {
+              "by": "curious",
+      "votes": 48,
+              "age": 1800,
+              "text": "那如果工具链只有一个 200 行的模板文件呢？"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "把 TCP 协议当成公开接口来设计",
+      "url": "https://example.invalid/protocol-as-api",
+      "by": "antirez",
+      "votes": 288,
+      "age": 90000
+    },
+    {
+      "title": "Show HN: 一个只用键盘的网页浏览器",
+      "url": "https://example.invalid/kbd",
+      "by": "sivers",
+      "votes": 74,
+      "age": 21600,
+      "comments": [
+        {
+          "by": "kens",
+          "age": 18000,
+          "text": "地址栏即命令行的思路很好，但拼错的时候需要一点容错。"
+        }
+      ]
+    },
+    {
+      "title": "十六 KB 的页面上限是个好设计",
+      "url": "",
+      "text": "限制比规范更能塑造行为。一个硬性的大小上限会逼着你把页面想清楚。",
+      "by": "nostrademons",
+      "votes": 130,
+      "age": 36000,
+      "comments": [
+        {
+          "by": "chubot",
+          "age": 30000,
+          "text": "同意，但评论区之类的场景会撞到墙。作者打算怎么处理分页？",
+          "replies": [
+            {
+              "by": "nostrademons",
+      "votes": 130,
+              "age": 24000,
+              "text": "分页是最古老的答案，而且它没坏过。"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "为什么我不再写 SPA 了",
+      "url": "https://example.invalid/no-spa",
+      "by": "kruger",
+      "votes": 402,
+      "age": 172800
+    },
+    {
+      "title": "关于「足够好」的工程学",
+      "url": "https://example.invalid/good-enough",
+      "by": "wheels",
+      "votes": 96,
+      "age": 43200,
+      "comments": [
+        {
+          "by": "jgc",
+          "age": 40000,
+          "text": "问题在于「足够好」不是个可交付标准，每个人心里的线不一样。"
+        }
+      ]
+    },
+    {
+      "title": "一个周末写出能用的东西，靠的是什么",
+      "url": "",
+      "text": "我的经验是：先决定不做什么，再决定做什么。顺序反了就永远做不完。",
+      "by": "sama",
+      "votes": 240,
+      "age": 5400,
+      "comments": [
+        {
+          "by": "dhh",
+          "age": 4000,
+          "text": "还有一条：不要在设计阶段就考虑第二个用户。",
+          "replies": [
+            {
+              "by": "sama",
+      "votes": 240,
+              "age": 3200,
+              "text": "但第一个用户最好是你自己，不然你连判断标准都没有。"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "进程隔离是最好的权限系统",
+      "url": "https://example.invalid/process-isolation",
+      "by": "bcantrill",
+      "votes": 512,
+      "age": 259200
+    },
+    {
+      "title": "文本协议的可调试性被严重低估",
+      "url": "https://example.invalid/text-protocol",
+      "by": "fzliu",
+      "votes": 168,
+      "age": 10800,
+      "comments": [
+        {
+          "by": "simonw",
+      "votes": 210,
+          "age": 9000,
+          "text": "但二进制协议让你必须写一个客户端才能调试，这反而逼出了一个可用的客户端。",
+          "replies": [
+            {
+              "by": "fzliu",
+      "votes": 168,
+              "age": 7000,
+              "text": "这是我没想过的角度。工具链的成本会倒逼接口变清楚。"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Show HN: 我把留言板写成了一个数据库视图",
+      "url": "https://example.invalid/view",
+      "by": "nobody",
+      "votes": 12,
+      "age": 1800
+    },
+    {
+      "title": "你的文档为什么没人读",
+      "url": "",
+      "text": "因为读者要的不是文档，是「下一步该按哪个键」。",
+      "by": "craigkerstiens",
+      "votes": 190,
+      "age": 72000
+    },
+    {
+      "title": "把域名系统当成一个可以随时扔掉的装饰",
+      "url": "https://example.invalid/dns-decor",
+      "by": "tosh",
+      "votes": 58,
+      "age": 12000,
+      "comments": [
+        {
+          "by": "rjbs",
+          "age": 10000,
+          "text": "只要你的命名空间足够小，DNS 就确实是装饰。一旦跨组织，它立刻变成政治问题。"
+        }
+      ]
+    },
+    {
+      "title": "从零开始做一台能用的窗口系统要多久",
+      "url": "https://example.invalid/windowing",
+      "by": "raphlinus",
+      "votes": 366,
+      "age": 216000
+    },
+    {
+      "title": "问：哪些「显然正确」的设计后来被证明是错的",
+      "url": "",
+      "text": "我先说一个：把用户输入直接当 HTML 渲染。",
+      "by": "asker",
+      "votes": 84,
+      "age": 4800
+    }
+  ]
+}

@@ -24,6 +24,8 @@ struct PageSource {
     rel: String,
     url: String,
     text: String,
+    /// Prefix this page answers for, from `# nac:match /item/`.
+    matches: Option<String>,
 }
 
 fn main() {
@@ -58,11 +60,16 @@ fn run(site: &Path, data: &Path, archive: Option<&Path>) -> Result<(), String> {
         url: String,
         text: String,
         explicit_id: Option<u16>,
+        matches: Option<String>,
     }
     let mut page_files: Vec<PageFile> = Vec::new();
     let mut urls: BTreeSet<String> = BTreeSet::new();
     let mut used_ids: BTreeSet<u16> = BTreeSet::new();
     let mut images: Vec<(String, PathBuf)> = Vec::new();
+    // Files the pages need at run time: modules to import, data to read, anything
+    // that is not itself a page. Copied verbatim so a page can do what a normal
+    // Python program does.
+    let mut support: Vec<(String, PathBuf)> = Vec::new();
 
     for path in files {
         let rel = rel_string(site, &path);
@@ -71,8 +78,11 @@ fn run(site: &Path, data: &Path, archive: Option<&Path>) -> Result<(), String> {
             .and_then(|e| e.to_str())
             .unwrap_or("")
             .to_ascii_lowercase();
+        // A leading `_` on any part of the path means "support material, not a
+        // page" — the same convention Python itself uses for "leave this alone".
+        let support_only = is_support(&rel);
         match ext.as_str() {
-            "py" => {
+            "py" if !support_only => {
                 let text = fs::read_to_string(&path).map_err(|e| format!("{rel}: {e}"))?;
                 // Notepad 之类会存 BOM；Python 会因此报"非法字符"，先摘掉。
                 let text = text.strip_prefix('\u{feff}').unwrap_or(&text).to_string();
@@ -91,12 +101,21 @@ fn run(site: &Path, data: &Path, archive: Option<&Path>) -> Result<(), String> {
                         return Err(format!("{rel}: 页号 {id} 被用了两次"));
                     }
                 }
+                let matches = page_match(&text, &rel)?;
                 page_files.push(PageFile {
                     rel,
                     url,
                     text,
                     explicit_id,
+                    matches,
                 });
+            }
+            "py" => {
+                check_syntax(
+                    &fs::read_to_string(&path).map_err(|e| format!("{rel}: {e}"))?,
+                    &rel,
+                )?;
+                support.push((rel, path));
             }
             "page" => {
                 let stem = path
@@ -107,13 +126,15 @@ fn run(site: &Path, data: &Path, archive: Option<&Path>) -> Result<(), String> {
                     "{rel}: 不再支持 .page，改成同名 Python 页面 {stem}.py"
                 ));
             }
-            "png" | "jpg" | "jpeg" | "webp" | "gif" => images.push((rel, path)),
-            "bmp" | "tif" | "tiff" | "avif" | "heic" => {
+            "png" | "jpg" | "jpeg" | "webp" | "gif" if !support_only => {
+                images.push((rel, path))
+            }
+            "bmp" | "tif" | "tiff" | "avif" | "heic" if !support_only => {
                 return Err(format!(
                     "{rel}: 不支持 {ext}；请导出成 png（无损）或 jpeg / webp / gif"
                 ));
             }
-            _ => {}
+            _ => support.push((rel, path)),
         }
     }
 
@@ -136,6 +157,7 @@ fn run(site: &Path, data: &Path, archive: Option<&Path>) -> Result<(), String> {
                 rel: page.rel,
                 url: page.url,
                 text: page.text,
+                matches: page.matches,
             },
         );
     }
@@ -224,10 +246,22 @@ fn run(site: &Path, data: &Path, archive: Option<&Path>) -> Result<(), String> {
     let helper = NAC_PY
         .replace("@PAGES@", &page_list(&pages))
         .replace("@PATHS@", &path_map(&pages))
+        .replace("@MATCHES@", &match_map(&pages))
         .replace("@IMAGES@", &image_map(&image_sizes))
         .replace("@TITLES@", &title_map(&pages))
         .replace("@GEN@", &gen);
     fs::write(gen_dir.join("scripts").join("nac.py"), helper).map_err(|e| e.to_string())?;
+
+    // Support material goes next to the pages, keeping its own path, so a page can
+    // `import _lib.hn` or `open("_data/seed.json")` the way any Python program
+    // would — both resolve relative to the working directory, which is `scripts/`.
+    for (rel, src) in &support {
+        let dest = gen_dir.join("scripts").join(rel);
+        if let Some(parent) = dest.parent() {
+            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        fs::copy(src, &dest).map_err(|e| format!("{rel}: {e}"))?;
+    }
 
     let mut page_entries = Vec::new();
     for (id, page) in &pages {
@@ -266,6 +300,7 @@ fn run(site: &Path, data: &Path, archive: Option<&Path>) -> Result<(), String> {
                 "hash": format!("{:016x}", protocol::fnv1a64(text.as_bytes())),
                 "file": rel_file,
                 "path": page.url,
+                "match": page.matches,
             }));
         }
     }
@@ -291,6 +326,41 @@ fn run(site: &Path, data: &Path, archive: Option<&Path>) -> Result<(), String> {
     );
     prune(data);
     Ok(())
+}
+
+/// Any path component starting with `_` marks support material: modules to
+/// import, data files to read — not pages. Same idea as Python's own rule for
+/// names that are internal.
+fn is_support(rel: &str) -> bool {
+    rel.split('/').any(|part| part.starts_with('_'))
+}
+
+/// Reads `# nac:match /item/` — the prefix a dynamic page answers for.
+fn page_match(text: &str, rel: &str) -> Result<Option<String>, String> {
+    for line in text.lines() {
+        let Some(rest) = line.trim().strip_prefix("# nac:match") else {
+            continue;
+        };
+        if !rest.chars().next().map_or(true, char::is_whitespace) {
+            continue;
+        }
+        let value = rest.trim();
+        if value.is_empty() {
+            return Err(format!("{rel}: # nac:match 后面要写前缀路径，例如 /item/"));
+        }
+        if !value.starts_with('/') || !value.ends_with('/') {
+            return Err(format!(
+                "{rel}: # nac:match 必须以 / 开头并以 / 结尾，例如 /item/（现在是 {value}）"
+            ));
+        }
+        if text.lines().any(|l| l.trim() == "# nac:static") {
+            return Err(format!(
+                "{rel}: 静态页不能声明 # nac:match —— 预渲染的结果只有一份，没法按地址区分"
+            ));
+        }
+        return Ok(Some(value.to_string()));
+    }
+    Ok(None)
 }
 
 fn walk(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
@@ -433,6 +503,25 @@ fn path_map(pages: &BTreeMap<u16, PageSource>) -> String {
     out
 }
 
+/// Prefix -> page id, so `link_path("/item/42", ...)` can tell that `/item/42`
+/// belongs to the page that answers `/item/`.
+fn match_map(pages: &BTreeMap<u16, PageSource>) -> String {
+    let mut out = String::from("{");
+    let mut first = true;
+    for (id, page) in pages.iter() {
+        let Some(prefix) = &page.matches else {
+            continue;
+        };
+        if !first {
+            out.push_str(", ");
+        }
+        first = false;
+        out.push_str(&format!("{prefix:?}: {id}"));
+    }
+    out.push('}');
+    out
+}
+
 fn title_map(pages: &BTreeMap<u16, PageSource>) -> String {
     let mut out = String::from("{");
     for (i, (id, page)) in pages.iter().enumerate() {
@@ -468,7 +557,7 @@ fn check_syntax(text: &str, rel: &str) -> Result<(), String> {
             "python3".to_string()
         }
     });
-    let script = "import ast,sys;ast.parse(sys.stdin.read())";
+    let script = "import sys;compile(sys.stdin.read(),'<page>','exec')";
     let mut child = match std::process::Command::new(&python)
         .args(["-B", "-X", "utf8", "-c", script])
         .env("PYTHONUTF8", "1")
@@ -620,11 +709,41 @@ fn prune(data: &Path) {
 
 #[cfg(test)]
 mod tests {
-    use super::{allocate_page_id, normalize_page_path, page_url, switch_current};
+    use super::{
+        allocate_page_id, is_support, normalize_page_path, page_match, page_url, switch_current,
+    };
     use std::collections::BTreeSet;
     use std::fs;
     use std::path::Path;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn underscore_names_are_support_material_not_pages() {
+        assert!(!is_support("index.py"));
+        assert!(!is_support("blog/post.py"));
+        assert!(is_support("_lib/util.py"));
+        assert!(is_support("_data/seed.json"));
+        assert!(is_support("blog/_draft.py"));
+        assert!(is_support("_notes.txt"));
+    }
+
+    #[test]
+    fn match_prefixes_are_read_and_validated() {
+        assert_eq!(page_match("x = 1", "a.py").unwrap(), None);
+        assert_eq!(
+            page_match("# comment\n# nac:match /item/\n#!py\n", "a.py")
+                .unwrap()
+                .as_deref(),
+            Some("/item/")
+        );
+        // A comment that merely starts with the same words is not a directive.
+        assert_eq!(page_match("# nac:matches /item/", "a.py").unwrap(), None);
+        assert!(page_match("# nac:match item/", "a.py").is_err());
+        assert!(page_match("# nac:match /item", "a.py").is_err());
+        assert!(page_match("# nac:match\n", "a.py").is_err());
+        // Pre-rendered output is a single frozen file, so it cannot answer a family.
+        assert!(page_match("# nac:static\n# nac:match /item/\n", "a.py").is_err());
+    }
 
     #[test]
     fn derives_paths_from_names_and_directories() {
