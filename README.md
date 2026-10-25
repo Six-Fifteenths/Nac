@@ -59,6 +59,7 @@ cp nac.routes.example nac.routes                        # 填上服务器地址
 | `iris.out` | `site-iris/` | 一份清单：看过听过的东西，带分数与统计 |
 | `EX_MYTH` | `site-myth/` | 八条神话，条目互相指路；名字里的下划线在真域名系统里是非法的 |
 | `web.shell` | `site-web.shell/` | 终端样式的站：命令、密码门、彩蛋（照 WebShell 复刻） |
+| `conduit.sh` | `site-conduit/` | 一个真的多页面应用：注册、发文、评论、标签、收藏、关注、分页（RealWorld 规格） |
 
 加第五个站不用改客户端：
 

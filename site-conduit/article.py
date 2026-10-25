@@ -80,6 +80,7 @@ for para in row["body"].split("\n\n"):
     text = para.strip()
     if text:
         nac.p(text)
+        nac.gap()
 nac.gap()
 
 if row["tags"]:

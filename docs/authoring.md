@@ -272,6 +272,7 @@ nac.p("细节见 ", nac.inline_path("/notes/", "笔记目录"), " 那一页。")
 | `nac.textarea(name, label="")` | 多行输入 |
 | `nac.select(name, label, options)` | 下拉选择，`options` 是字符串列表 |
 | `nac.check(name, label="")` | 复选框；勾上提交 `"1"`，否则空串 |
+| `nac.prefill(name, value)` | 给字段填上初始文字；只在读者还没动过它时生效 |
 | `nac.hidden(name, value)` | 看不见的字段，跟着表单一起提交（记住「刚才是哪一条」） |
 | `nac.button(label)` | 提交按钮 |
 
@@ -460,6 +461,7 @@ nac.done()
 [[select mode|提示|甲;乙;丙]]   下拉选择
 [[check agree|同意]]     复选框
 [[hidden item|42]]      看不到的字段，跟着表单提交
+[[prefill name|原文]]    给字段一个初始值（只在读者没动过时生效）
 [[button 提交]]          按钮
 
 [[cols 2]] … [[col]] … [[end]]          并排布局

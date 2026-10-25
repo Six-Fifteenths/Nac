@@ -928,6 +928,12 @@ fn split_pipe(s: &str) -> Option<(&str, &str)> {
 fn page_link(line: &str) -> Option<(LinkTarget, String)> {
     let rest = line.strip_prefix("[[")?;
     let end = rest.find("]]")?;
+    // A whole-line link has to *be* the whole line. Anything after the closing
+    // bracket means this is a paragraph that happens to start with a link, and
+    // those used to lose every word after it.
+    if !rest[end + 2..].trim().is_empty() {
+        return None;
+    }
     bracket_link(&rest[..end])
 }
 
@@ -1131,6 +1137,27 @@ mod tests {
                 ));
             }
             other => panic!("expected a term block, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_paragraph_may_start_with_a_link() {
+        // The bug this guards: `[[path:/a|甲]]  其余文字` used to parse as a lone
+        // link, silently dropping everything after the bracket.
+        let src = "[[path:/profile/demo|demo]]  ·  2026-10-26  ·  ♥ 3\n";
+        match only(&parse(src)) {
+            Block::Para(parts) => {
+                assert_eq!(parts.len(), 2);
+                assert!(matches!(&parts[0], Inline::Link { .. }));
+                assert!(matches!(&parts[1], Inline::Text(t) if t.contains("2026")));
+            }
+            other => panic!("expected a paragraph, got {other:?}"),
+        }
+
+        // A line that is nothing but a link still becomes a whole-line link.
+        match only(&parse("[[path:/a|甲]]\n")) {
+            Block::Link { .. } => {}
+            other => panic!("expected a block link, got {other:?}"),
         }
     }
 
