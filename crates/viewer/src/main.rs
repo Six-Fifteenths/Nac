@@ -15,11 +15,13 @@ mod loader;
 mod markup;
 mod net;
 mod routes;
+mod style;
 mod tls;
 #[cfg(feature = "admin")]
 mod tunnel;
 
 use markup::{Block, Inline, LinkTarget, NoteKind};
+use style::{Style, Text};
 
 /// A windowed build has no console, so a panic at startup used to look exactly
 /// like "double-clicking does nothing": the process vanished and said nothing.
@@ -853,6 +855,8 @@ struct Tab {
     address_focused: bool,
     focus_input: bool,
     saved_fields: HashMap<u16, HashMap<String, String>>,
+    /// `[[sheet]]` rules, gathered before the first box is drawn.
+    sheet: HashMap<String, Style>,
     shown_path: Option<String>,
     /// When the current page's `[[scene]]` timelines started. Reset on every
     /// page load, so a reload replays the animation instead of resuming it.
@@ -997,6 +1001,7 @@ impl Tab {
             address_focused: false,
             focus_input: false,
             saved_fields: HashMap::new(),
+            sheet: HashMap::new(),
             shown_path: None,
             scene_clock: None,
             target,
@@ -1674,6 +1679,114 @@ impl Tab {
         }
     }
 
+    /// Draws one `[[box]]`: margins, then a frame with background, border and
+    /// padding, then its children either stacked or in a row with `grow`.
+    fn render_box(&mut self, ui: &mut egui::Ui, style: &Style, children: Vec<Block>, text: Text) {
+        let sheet = self.sheet.clone();
+        let class = style
+            .class
+            .as_ref()
+            .and_then(|name| sheet.get(name))
+            .cloned()
+            .unwrap_or_default();
+        let merged = style.over(&class);
+        let inner = text.inherit(&merged);
+
+        let margin = merged.margin.unwrap_or((0.0, 0.0));
+        if margin.1 > 0.0 {
+            ui.add_space(margin.1);
+        }
+
+        let available = ui.available_width();
+        let want = merged
+            .width
+            .or(merged.max_width)
+            .map(|w| w.min(available))
+            .unwrap_or(available);
+        let centred = matches!(merged.align, Some(style::Align::Center)) && want < available - 1.0;
+        let offset = if centred { (available - want) / 2.0 } else { 0.0 };
+
+        ui.horizontal_top(|ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;
+            if margin.0 > 0.0 {
+                ui.add_space(margin.0);
+            }
+            if offset > 0.0 {
+                ui.add_space(offset);
+            }
+            ui.allocate_ui_with_layout(
+                egui::vec2(want, 0.0),
+                Layout::top_down(Align::Min),
+                |ui| {
+                    ui.set_width(want);
+                    let pad = merged.pad.unwrap_or((0.0, 0.0));
+                    let mut frame = egui::Frame::new()
+                        .inner_margin(egui::Margin {
+                            left: pad.0 as i8,
+                            right: pad.0 as i8,
+                            top: pad.1 as i8,
+                            bottom: pad.1 as i8,
+                        });
+                    if let Some(bg) = merged.bg {
+                        frame = frame.fill(bg);
+                    }
+                    if let Some((width, colour)) = merged.border {
+                        frame = frame.stroke(egui::Stroke::new(width, colour));
+                    }
+                    if let Some(radius) = merged.radius {
+                        frame = frame.corner_radius(egui::CornerRadius::same(radius as u8));
+                    }
+                    frame.show(ui, |ui| {
+                        ui.set_width((want - pad.0 * 2.0).max(20.0));
+                        if merged.row == Some(true) {
+                            self.render_row(ui, children, &merged, inner);
+                        } else {
+                            if let Some(h) = merged.min_height {
+                                ui.set_min_height(h);
+                            }
+                            self.render_list(ui, children, inner);
+                        }
+                    });
+                },
+            );
+        });
+        if margin.1 > 0.0 {
+            ui.add_space(margin.1);
+        }
+    }
+
+    fn render_row(&mut self, ui: &mut egui::Ui, children: Vec<Block>, style: &Style, text: Text) {
+        let gap = style.gap.unwrap_or(12.0);
+        ui.horizontal_top(|ui| {
+            ui.spacing_mut().item_spacing.x = gap;
+            let grows: Vec<f32> = children
+                .iter()
+                .map(|child| match child {
+                    Block::Box { style, .. } => style.grow.unwrap_or(0.0),
+                    _ => 0.0,
+                })
+                .collect();
+            let total: f32 = grows.iter().sum();
+            let count = children.len().max(1);
+            let pool = (ui.available_width() - gap * (count.saturating_sub(1)) as f32).max(40.0);
+            for (child, grow) in children.into_iter().zip(grows) {
+                if total > 0.0 && grow > 0.0 {
+                    let width = (pool * grow / total).max(40.0);
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(width, 0.0),
+                        Layout::top_down(Align::Min),
+                        |ui| {
+                            ui.set_width(width);
+                            self.render_box(ui, &Style::default(), vec![child], text);
+                        },
+                    );
+                } else {
+                    self.render_box(ui, &Style::default(), vec![child], text);
+                }
+            }
+        });
+    }
+
     fn render_term(&mut self, ui: &mut egui::Ui, term: &markup::Term) {
         let bg = if term.bare { Color32::BLACK } else { TERM_BG };
         let body = if term.bare { Color32::WHITE } else { TERM_FG };
@@ -1896,6 +2009,7 @@ impl Tab {
     fn render_note(
         &mut self,
         ui: &mut egui::Ui,
+        text: Text,
         kind: NoteKind,
         title: &[Inline],
         body: Vec<Block>,
@@ -1929,12 +2043,18 @@ impl Tab {
                 });
                 ui.add_space(4.0);
             }
-            self.render_list(ui, body);
+            self.render_list(ui, body, text);
         });
         ui.add_space(8.0);
     }
 
-    fn render_tabs(&mut self, ui: &mut egui::Ui, titles: &[String], bodies: Vec<Vec<Block>>) {
+    fn render_tabs(
+        &mut self,
+        ui: &mut egui::Ui,
+        titles: &[String],
+        bodies: Vec<Vec<Block>>,
+        text: Text,
+    ) {
         let id = ui.next_auto_id();
         let mut selected = ui.data_mut(|d| *d.get_temp_mut_or_default::<usize>(id));
         if selected >= titles.len() {
@@ -1950,40 +2070,45 @@ impl Tab {
         ui.data_mut(|d| d.insert_temp(id, selected));
         ui.add_space(6.0);
         if let Some(body) = bodies.into_iter().nth(selected) {
-            self.render_list(ui, body);
+            self.render_list(ui, body, text);
         }
         ui.add_space(6.0);
     }
 
     fn render_blocks(&mut self, ui: &mut egui::Ui) {
         let blocks = self.blocks.clone();
-        self.render_list(ui, blocks);
+        self.sheet.clear();
+        collect_sheet(&blocks, &mut self.sheet);
+        self.render_list(ui, blocks, Text::default());
     }
 
-    fn render_list(&mut self, ui: &mut egui::Ui, blocks: Vec<Block>) {
-        let body = Color32::from_gray(28);
-        let muted = Color32::from_gray(110);
+    fn render_list(&mut self, ui: &mut egui::Ui, blocks: Vec<Block>, text: Text) {
+        let body = text.color;
+        let muted = text.color.gamma_multiply(0.62);
+        // Links take their colour from the enclosing box, so a dark navbar can
+        // say so once instead of on every link.
+        ui.visuals_mut().hyperlink_color = text.link;
         let mut saw_input = false;
 
         for block in blocks {
             match block {
                 Block::Heading(level, parts) => {
-                    let size = match level {
-                        1 => 30.0,
-                        2 => 23.0,
-                        _ => 19.0,
+                    let scale = match level {
+                        1 => 1.75,
+                        2 => 1.32,
+                        _ => 1.1,
                     };
                     ui.add_space(14.0);
                     ui.label(self.job(
                         &parts,
-                        size,
-                        Color32::from_gray(15),
+                        text.size * scale,
+                        text.color,
                         FontFamily::Name(Arc::from("bold")),
                     ));
                     ui.add_space(6.0);
                 }
                 Block::Para(parts) => {
-                    self.render_flow(ui, &parts, 17.0, body, FontFamily::Proportional);
+                    self.render_flow(ui, &parts, text.size, body, text.family());
                     ui.add_space(8.0);
                 }
                 Block::Quote(parts) => {
@@ -2095,6 +2220,10 @@ impl Tab {
                 } => {
                     self.render_scene(ui, width, height, seconds, &bars);
                 }
+                Block::Box { style, children } => {
+                    self.render_box(ui, &style, children, text);
+                }
+                Block::Sheet(_) => {}
                 Block::Term(term) => {
                     if term.target.is_some() {
                         saw_input = true;
@@ -2148,18 +2277,18 @@ impl Tab {
                     title,
                     body: inner,
                 } => {
-                    self.render_note(ui, kind, &title, inner);
+                    self.render_note(ui, text, kind, &title, inner);
                 }
                 Block::Details { summary, body } => {
                     let label = markup::plain(&summary);
                     let salt = ui.next_auto_id();
                     egui::CollapsingHeader::new(RichText::new(label).size(16.0))
                         .id_salt(salt)
-                        .show(ui, |ui| self.render_list(ui, body));
+                        .show(ui, |ui| self.render_list(ui, body, text));
                     ui.add_space(6.0);
                 }
                 Block::Tabs { titles, bodies } => {
-                    self.render_tabs(ui, &titles, bodies);
+                    self.render_tabs(ui, &titles, bodies, text);
                 }
                 Block::Textarea { name, label } => {
                     saw_input = true;
@@ -2235,7 +2364,7 @@ impl Tab {
                                 Layout::top_down(Align::LEFT),
                                 |ui| {
                                     ui.set_width(col_w);
-                                    self.render_list(ui, part);
+                                    self.render_list(ui, part, text);
                                 },
                             );
                         }
@@ -2660,6 +2789,33 @@ impl eframe::App for Viewer {
         if should_sync_address(focused, self.addr_hold, self.addr_edited, &self.addr_input, &want) {
             self.addr_input = want;
             self.addr_edited = false;
+        }
+    }
+}
+
+/// Walks the whole page for `[[sheet]]` rules before anything is drawn.
+fn collect_sheet(blocks: &[Block], out: &mut HashMap<String, Style>) {
+    for block in blocks {
+        match block {
+            Block::Sheet(rules) => {
+                for (name, style) in rules {
+                    let merged = style.clone().over(out.get(name).unwrap_or(&Style::default()));
+                    out.insert(name.clone(), merged);
+                }
+            }
+            Block::Box { children, .. } => collect_sheet(children, out),
+            Block::Columns(parts) => {
+                for part in parts {
+                    collect_sheet(part, out);
+                }
+            }
+            Block::Note { body, .. } | Block::Details { body, .. } => collect_sheet(body, out),
+            Block::Tabs { bodies, .. } => {
+                for body in bodies {
+                    collect_sheet(body, out);
+                }
+            }
+            _ => {}
         }
     }
 }

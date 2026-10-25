@@ -13,8 +13,8 @@ from _lib import auth, store, ui
 db = store.connect()
 user = auth.current(db)
 
-ui.nav(user)
-ui.hero("A place to share your knowledge.")
+ui.head(user)
+ui.hero("conduit", "A place to share your knowledge.")
 ui.tabs_row(user, "all")
 
 total = store.count_articles(db)

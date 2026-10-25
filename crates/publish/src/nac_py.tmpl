@@ -523,6 +523,88 @@ def prefill(name, value):
     _buf.append("[[prefill %s|%s]]" % (_cell(name), _cell(text)))
 
 
+# --------------------------------------------------------------- L. 样式
+
+#: 盒子的属性名与 CSS 里写的名字一一对应，两种写法都收（k=v 或 k: v）。
+BOX_KEYS = {
+    "class", "bg", "color", "pad", "margin", "gap", "w", "maxw", "minh",
+    "radius", "border", "dir", "grow", "align", "size", "weight", "mono",
+    "italic", "link", "nowrap",
+}
+
+
+def _attrs(attrs):
+    out = []
+    for key in sorted(attrs):
+        name = str(key).lower()
+        if name not in BOX_KEYS:
+            raise ValueError("不认识的样式属性：%s（可用：%s）" % (key, ", ".join(sorted(BOX_KEYS))))
+        value = attrs[key]
+        if value is None or value is False:
+            continue
+        if value is True:
+            out.append(name)
+        elif isinstance(value, (tuple, list)):
+            # `margin=(16, 0)` —— 成对的数值按 `16,0` 发出去。
+            out.append("%s=%s" % (name, ",".join(str(v) for v in value)))
+        else:
+            out.append("%s=%s" % (name, _cell(value)))
+    return " ".join(out)
+
+
+def sheet(text):
+    """整页的样式表，一行一条规则。
+
+        nac.sheet(".card { bg: #fff; border: 1px:#ddd; radius: 4; pad: 16; }")
+
+    选择器只能是 `.类名`；同名规则后者覆盖前者。多行的话用三引号字符串，
+    每行一条，写成 CSS 的样子即可。
+    """
+    _buf.append("[[sheet]]")
+    for line in str(text).strip().splitlines():
+        line = line.strip()
+        if line:
+            _buf.append(line)
+    _buf.append("[[end]]")
+
+
+@contextmanager
+def box(*positional, **attrs):
+    """一个盒子：底色、边框、圆角、内边距、宽度、方向。
+
+        with nac.box("card", pad=16):
+            nac.p("卡片里的一段话")
+
+    第一个位置参数是类名（`class` 是 Python 关键字，没法当关键字参数用）。
+    """
+    if positional:
+        attrs["class"] = positional[0]
+    if "cls" in attrs:
+        attrs["class"] = attrs.pop("cls")
+    _buf.append("[[box %s]]" % _attrs(attrs))
+    try:
+        yield
+    finally:
+        _buf.append("[[end]]")
+
+
+@contextmanager
+def row(*positional, **attrs):
+    """横排的盒子，子盒子用 grow= 分宽度。"""
+    attrs["dir"] = "row"
+    with box(*positional, **attrs):
+        yield
+
+
+@contextmanager
+def span(*positional, **attrs):
+    """行内盒子：不换行，宽度跟着内容。"""
+    attrs.setdefault("dir", "row")
+    attrs.setdefault("nowrap", True)
+    with box(*positional, **attrs):
+        yield
+
+
 def button(label):
     """提交按钮。一页里最后一个按钮决定提交目标，通常只放一个。"""
     _buf.append("[[button %s]]" % _cell(label))
@@ -820,7 +902,7 @@ def pages():
     return [(page, url(page), title_of(page)) for page in PAGES]
 
 
-# ---------------------------------------------------------------- L. 终端
+# ---------------------------------------------------------------- L. 终端与样式
 
 #: 终端面板里一段文字的角色代码。生成页面时用这些名字，别直接写两字母码。
 TERM = {

@@ -6,6 +6,8 @@
 //! returns at its own `[[end]]`, so nesting depth is bounded by the input rather
 //! than by bespoke depth counters.
 
+use crate::style::Style;
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Inline {
     Text(String),
@@ -215,6 +217,14 @@ pub enum Block {
     },
     /// `[[term panel|标题|页号]] … [[end]]`
     Term(Term),
+    /// `[[sheet]] .name { bg: #fff; } [[end]]` — class name → style. Collected
+    /// before rendering, never drawn itself.
+    Sheet(Vec<(String, Style)>),
+    /// `[[box class=card pad=16 bg=#fff]] … [[end]]` — the layout primitive.
+    Box {
+        style: Style,
+        children: Vec<Block>,
+    },
 }
 
 pub fn parse(text: &str) -> Vec<Block> {
@@ -382,6 +392,22 @@ fn parse_one(lines: &[&str], i: &mut usize) -> Option<Block> {
 
     if let Some(rest) = t.strip_prefix("[[term") {
         return parse_term(lines, i, inner_spec(rest));
+    }
+
+    if head == "[[sheet]]" {
+        *i += 1;
+        return Some(Block::Sheet(parse_sheet(lines, i)));
+    }
+
+    if let Some(rest) = t.strip_prefix("[[box") {
+        let attrs = inner_spec(rest);
+        *i += 1;
+        let (mut children, _) = parse_seq(lines, i, &["[[end]]"]);
+        trim_gaps(&mut children);
+        return Some(Block::Box {
+            style: Style::from_attrs(attrs),
+            children,
+        });
     }
 
     if let Some(rest) = t.strip_prefix("[[code") {
@@ -613,6 +639,39 @@ fn parse_tabs(lines: &[&str], i: &mut usize, spec: &str) -> Option<Block> {
         }
     }
     Some(Block::Tabs { titles, bodies })
+}
+
+/// `.name { key: value; key: value }` … up to `[[end]]`.
+///
+/// One class per rule, no nesting, no selectors. A second rule for the same name
+/// wins, which is the only cascade there is.
+fn parse_sheet(lines: &[&str], i: &mut usize) -> Vec<(String, Style)> {
+    let mut out: Vec<(String, Style)> = Vec::new();
+    while *i < lines.len() {
+        let line = lines[*i].trim();
+        *i += 1;
+        if line == "[[end]]" {
+            break;
+        }
+        if line.is_empty() {
+            continue;
+        }
+        let Some((selector, body)) = line.split_once('{') else {
+            continue;
+        };
+        let name = selector.trim().trim_start_matches('.').to_string();
+        if name.is_empty() {
+            continue;
+        }
+        let body = body.trim_end_matches('}');
+        let style = Style::from_declarations(body);
+        if let Some(slot) = out.iter_mut().find(|(existing, _)| *existing == name) {
+            slot.1 = style.over(&slot.1);
+        } else {
+            out.push((name, style));
+        }
+    }
+    out
 }
 
 /// `[[term 版式|标题|页号]]`, then one directive per line, then `[[end]]`.
@@ -1137,6 +1196,32 @@ mod tests {
                 ));
             }
             other => panic!("expected a term block, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_box_carries_its_class_and_its_children() {
+        let src = "[[box class=card pad=16]]\n[[h3?]]\n正文\n[[end]]\n";
+        match only(&parse(&src.replace("[[h3?]]", "# 标题"))) {
+            Block::Box { style, children } => {
+                assert_eq!(style.pad, Some((16.0, 16.0)));
+                assert_eq!(children.len(), 2);
+                assert!(matches!(children[0], Block::Heading(1, _)));
+            }
+            other => panic!("expected a box, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_sheet_turns_rules_into_classes() {
+        let src = "[[sheet]]\n.card { bg: #fff; border: 1:#ddd; }\n[[end]]\n";
+        match only(&parse(src)) {
+            Block::Sheet(rules) => {
+                assert_eq!(rules.len(), 1);
+                assert_eq!(rules[0].0, "card");
+                assert_eq!(rules[0].1.border.map(|b| b.0), Some(1.0));
+            }
+            other => panic!("expected a sheet, got {other:?}"),
         }
     }
 

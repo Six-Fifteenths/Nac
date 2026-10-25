@@ -10,7 +10,7 @@ from _lib import auth, store, ui
 db = store.connect()
 user = auth.current(db)
 
-ui.nav(user)
+ui.head(user)
 
 if user:
     nac.h1("已经登录了")

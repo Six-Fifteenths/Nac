@@ -23,7 +23,7 @@ parts = [p for p in nac.path_arg("/article/").split("/") if p]
 slug = parts[0] if parts else ""
 action = parts[1] if len(parts) > 1 else ""
 
-ui.nav(user)
+ui.head(user)
 
 if not slug:
     nac.h1("文章")

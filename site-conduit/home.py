@@ -13,7 +13,7 @@ user = auth.current(db)
 arg = nac.path_arg("/home/")
 page = int(arg) if arg.isdigit() else 1
 
-ui.nav(user)
+ui.head(user)
 ui.tabs_row(user, "all")
 nac.h1("全部文章")
 

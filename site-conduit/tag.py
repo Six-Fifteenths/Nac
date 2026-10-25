@@ -14,7 +14,7 @@ parts = [p for p in nac.path_arg("/tag/").split("/") if p]
 tag = parts[0] if parts else ""
 page = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 1
 
-ui.nav(user)
+ui.head(user)
 
 if not tag:
     nac.h1("标签")

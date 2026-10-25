@@ -9,7 +9,7 @@ from _lib import auth, store, ui
 
 db = store.connect()
 user = auth.current(db)
-ui.nav(user)
+ui.head(user)
 auth.require(user, "/editor")
 
 parts = [p for p in nac.path_arg("/editor/").split("/") if p]

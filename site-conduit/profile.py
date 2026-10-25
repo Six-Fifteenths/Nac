@@ -15,7 +15,7 @@ parts = [p for p in nac.path_arg("/profile/").split("/") if p]
 name = parts[0] if parts else ""
 tab = parts[1] if len(parts) > 1 else ""
 
-ui.nav(user)
+ui.head(user)
 
 who = store.user_by_name(db, name)
 if who is None:
