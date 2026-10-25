@@ -7,22 +7,22 @@ import time
 import nac
 
 views = nac.counter("status-views.json")
-guest_count = len(nac.read_lines("guestbook.txt"))
-name = nac.session_get("name")
-mood = nac.session_get("mood")
 
-gen = "?"
-pages = []
-try:
-    data_root = nac.data_dir().parent
-    gen = (data_root / "current").read_text(encoding="utf-8").strip()
-    manifest = json.loads((data_root / "gen" / gen / "manifest.json").read_text(encoding="utf-8"))
-    pages = manifest.get("pages", [])
-except Exception:
-    pass
-
-static = sum(1 for page in pages if page.get("kind") == "static")
-dynamic = sum(1 for page in pages if page.get("kind") == "dynamic")
+db = nac.db()
+has_msg = db.execute(
+    "select name from sqlite_master where type='table' and name='msg'"
+).fetchone()
+messages = db.execute("select count(*) as n from msg").fetchone()["n"] if has_msg else 0
+saved_name = nac.session_get("name")
+saved_mood = nac.session_get("mood")
+gen = nac.GEN
+pages = nac.pages()
+manifest = json.loads(
+    (nac.data_dir().parent / "gen" / gen / "manifest.json").read_text(encoding="utf-8")
+)
+stats = {}
+for page in manifest.get("pages", []):
+    stats[page["kind"]] = stats.get(page["kind"], 0) + 1
 
 nac.h1("运行状态")
 nac.p("这一页每次访问都执行 Python，读当前时间、当前代和站点私有数据。")
@@ -36,24 +36,28 @@ with nac.cols(2):
     nac.col()
     nac.h3("这一代")
     nac.p("代名：", nac.tt(gen))
-    nac.p("页面 ", nac.b(len(pages)), " 个（静态 ", static, " / 动态 ", dynamic, "）。")
+    nac.p("页面 ", nac.b(len(pages)), " 个（静态 ", stats.get("static", 0), " / 动态 ", stats.get("dynamic", 0), "）。")
     nac.p("图片 ", nac.b(len(nac.IMAGES)), " 张。")
 
 nac.gap()
 nac.h2("站点数据")
-nac.bullets(
-    "留言板累计 %d 条。" % guest_count,
-    "状态页计数、留言和会话都写在 data/appdata/ 下。",
-    "写文件使用临时文件 + 原子替换，不会留下半截 JSON。",
+nac.table(
+    ("数据", "位置", "现状"),
+    [
+        ("留言", nac.tt("site.db · msg"), "%d 条" % messages),
+        ("状态页计数", nac.tt("status-views.json"), "%d 次" % views),
+        ("会话", nac.tt("state/sessions/"), "名字 %s" % nac.b(saved_name or "（空）")),
+    ],
 )
+with nac.tip("都在这台机器上"):
+    nac.p("上面三个都在 ", nac.tt("data/appdata/"), " 与 ", nac.tt("data/state/"), " 里，不外发，也不联网。")
 
 nac.gap()
-nac.h2("你的会话")
-if name or mood:
-    nac.p("名字：", nac.b(name or "（空）"))
-    nac.p("心情：", nac.i(mood or "（空）"))
-else:
-    nac.p("还没有会话数据。去 ", nac.tt("/interactive"), " 提交一次表单，再回来看看。")
+nac.h2("这一代有哪些页")
+nac.table(
+    ("页面", "路径"),
+    [("[[path:%s|%s]]" % (path, title or path), nac.tt(path)) for _, path, title in pages],
+)
 
 nac.gap()
 nac.h2("观察点")
@@ -63,6 +67,4 @@ nac.bullets(
     "页面失败统一返回空响应，原因只写服务端日志。",
 )
 nac.gap()
-nac.link_path("/interactive", "互动实验")
-nac.link_path("/guestbook", "留言板")
-nac.link_path("/", "回首页")
+nac.nav("/", "/status", "/guestbook")

@@ -10,13 +10,13 @@ nac.p("没有 HTML，没有 JavaScript，也没有浏览器。")
 nac.gap()
 nac.quote("内容不是网页，但访问它的方式，应该像网页一样自然。")
 nac.gap()
-nac.img("img/beacon.png", 100)
+nac.figure("img/beacon.png", "本代 %d 个页面，%d 张图片" % (len(nac.PAGES), len(nac.IMAGES)), 100)
 nac.gap()
 
 nac.h2("先逛一圈")
 with nac.cols(3):
     nac.h3("排版")
-    nac.p("标题、引用、列表、代码、分栏和图片。")
+    nac.p("标题、列表、表格、提示框、折叠、页签、分栏，都能互相嵌套。")
     nac.link_path("/features", "功能一览")
     nac.col()
     nac.h3("目录")
@@ -24,21 +24,49 @@ with nac.cols(3):
     nac.link_path("/notes/", "打开笔记目录")
     nac.col()
     nac.h3("互动")
-    nac.p("表单、密码框、会话和站点私有数据。")
+    nac.p("表单、多行输入、下拉框、会话和 SQLite。")
     nac.link_path("/interactive", "试一试")
 
 nac.gap()
-nac.h2("这个站点本身")
-nac.bullets(
-    "本代 %d 个页面、%d 张图片；页面路径由目录和文件名决定。" % (len(nac.PAGES), len(nac.IMAGES)),
-    "首页和大部分说明页在发布时预渲染，访问时不再启动 Python。",
-    "互动、留言和状态页每次访问都执行一次 Python，超时 2 秒。",
-    "公开站使用 TLS，客户端固定证书；地址栏显示 nac.local，而不是服务器 IP。",
+nac.h2("每一页都是程序")
+with nac.cols(2):
+    with nac.note("info", "静态页"):
+        nac.p("发布时执行一次，结果存成文件。访问时连 Python 都不启动。")
+        nac.p("这一页就是静态页。")
+    nac.col()
+    with nac.note("ok", "动态页"):
+        nac.p("每次访问都真的跑一次 Python，可以读时间、读表单、读写数据库。")
+        nac.p("超时 2 秒，失败只回空响应。")
+
+nac.gap()
+with nac.details("这个站点本身用了什么"):
+    nac.table(
+        ("部分", "做法"),
+        [
+            ("传输", "u32 长度 + 类型 + 负载，长度上限 32 KB"),
+            ("渲染", "Rust + egui 原生窗口，不是浏览器内核"),
+            ("页面", "Python 程序，标准库随便用"),
+            ("存储", "站点私有目录里的 JSON 与 SQLite"),
+            ("加密", "公开站 TLS + 证书固定；运营台只监听回环"),
+        ],
+    )
+
+nac.gap()
+nac.h2("想看什么")
+nac.nav("/", "/sitemap", "/toolbox", "/guestbook")
+nac.gap()
+nac.table(
+    ("页面", "看什么"),
+    [
+        ("[[path:/features|功能一览]]", "所有排版能力，一页看完"),
+        ("[[path:/toolbox|文字工具箱]]", "把输入交给 Python 算，结果画成表格"),
+        ("[[path:/guestbook|留言板]]", "SQLite、参数化查询、会话与跳转"),
+        ("[[path:/interactive|互动实验]]", "表单、密码框、会话状态"),
+        ("[[path:/sitemap|站点地图]]", "发布时自动生成的页面清单"),
+        ("[[path:/status|运行状态]]", "这一代的信息与你自己的会话"),
+        ("[[path:/notes/|笔记目录]]", "路径与目录、标记语法"),
+        ("[[path:/gallery|图片走廊]]", "发布时的无损元数据剥离"),
+    ],
 )
 nac.gap()
-nac.h2("更多入口")
-nac.link_path("/gallery", "图片走廊")
-nac.link_path("/layout", "分栏实验")
-nac.link_path("/guestbook", "留言板")
-nac.link_path("/status", "运行状态")
-nac.link_path("/about", "关于 Nac")
+nac.home()

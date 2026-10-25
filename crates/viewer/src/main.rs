@@ -966,6 +966,9 @@ impl Viewer {
         let mut run: Vec<Inline> = Vec::new();
         let mut clicked: Option<LinkTarget> = None;
         ui.horizontal_wrapped(|ui| {
+            // The gap between a label and a link would otherwise be an extra
+            // space in the middle of a sentence.
+            ui.spacing_mut().item_spacing.x = 0.0;
             for part in parts {
                 match part {
                     Inline::Link { target, text } => {
@@ -1020,13 +1023,16 @@ impl Viewer {
                 for row in rows {
                     for index in 0..columns {
                         match row.get(index) {
-                            Some(cell) => ui.label(self.job(
+                            Some(cell) => self.render_flow(
+                                ui,
                                 cell,
                                 16.0,
                                 Color32::from_gray(28),
                                 FontFamily::Proportional,
-                            )),
-                            None => ui.label(""),
+                            ),
+                            None => {
+                                ui.label("");
+                            }
                         };
                     }
                     ui.end_row();
@@ -1051,7 +1057,11 @@ impl Viewer {
         let frame = egui::Frame::new()
             .fill(fill)
             .inner_margin(egui::Margin::symmetric(10, 8));
+        let full_width = ui.available_width();
         frame.show(ui, |ui| {
+            // Without this the box shrinks to whatever the text happens to need,
+            // so a page with several notes gets boxes of different widths.
+            ui.set_min_width((full_width - 20.0).max(60.0));
             if !title.is_empty() {
                 ui.horizontal(|ui| {
                     let (rect, _) =
