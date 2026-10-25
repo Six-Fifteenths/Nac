@@ -404,6 +404,43 @@ impl Tab {
     }
 }
 
+/// The first heading anywhere in the tree, outermost first.
+///
+/// Nested blocks count: a page that wraps its body in a box still has a title.
+pub(crate) fn first_heading(blocks: &[Block]) -> Option<String> {
+    for block in blocks {
+        match block {
+            Block::Heading(_, parts) => return Some(markup::plain(parts)),
+            Block::Box { children, .. } => {
+                if let Some(found) = first_heading(children) {
+                    return Some(found);
+                }
+            }
+            Block::Columns(parts) => {
+                for part in parts {
+                    if let Some(found) = first_heading(part) {
+                        return Some(found);
+                    }
+                }
+            }
+            Block::Note { body, .. } | Block::Details { body, .. } => {
+                if let Some(found) = first_heading(body) {
+                    return Some(found);
+                }
+            }
+            Block::Tabs { bodies, .. } => {
+                for body in bodies {
+                    if let Some(found) = first_heading(body) {
+                        return Some(found);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 /// Walks the whole page for `[[sheet]]` rules before anything is drawn.
 pub(crate) fn collect_sheet(blocks: &[Block], out: &mut HashMap<String, Style>) {
     for block in blocks {
@@ -428,5 +465,16 @@ pub(crate) fn collect_sheet(blocks: &[Block], out: &mut HashMap<String, Style>) 
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_first_heading_is_found_inside_boxes() {
+        let page = "[[sheet]]\n.c { bg: #fff; }\n[[end]]\n[[box class=page]]\n[[box class=nav]]\n首页\n[[end]]\n# 文章标题\n正文\n[[end]]\n";
+        assert_eq!(first_heading(&markup::parse(page)).as_deref(), Some("文章标题"));
     }
 }

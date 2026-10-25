@@ -562,7 +562,8 @@ fn parse_one(lines: &[&str], i: &mut usize) -> Option<Block> {
 }
 
 fn parse_columns(lines: &[&str], i: &mut usize, spec: &str) -> Option<Block> {
-    let wanted = spec.parse::<u8>().unwrap_or(2).clamp(1, 4) as usize;
+    // 客户端不设上限：页面要几栏就几栏，窄窗口里自然变挤，这是页面自己的选择。
+    let wanted = spec.parse::<u16>().unwrap_or(2).clamp(1, 12) as usize;
     *i += 1;
     let mut segments = Vec::new();
     loop {

@@ -35,11 +35,11 @@ nac.h1("留言板")
 nac.p("留言写进站点私有目录里的 SQLite 数据库：不联网，也不需要额外的数据库服务。")
 
 for line in nac.flashes():
-    with nac.ok("刚完成"):
+    with nac.note("ok", "刚完成"):
         nac.p(line)
 
 if body and not nac.checked("public"):
-    with nac.warn("还没记下"):
+    with nac.note("warn", "还没记下"):
         nac.p("要勾一下「我知道留言是公开的」才会保存。")
 
 nac.gap()

@@ -14,6 +14,7 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use protocol::{
+    EmptyReason,
     decode_client, encode_server, ManifestEntry, Request, ServerMsg, CHUNK, MAX_FRAME,
     SESSION_LEN, VERSION,
 };
@@ -343,7 +344,7 @@ fn handle<S: Read + Write>(mut stream: S, state: Arc<State>) -> std::io::Result<
     };
     let Some(msg) = decode_client(&frame) else {
         log_line(&state, None, "malformed", started, 0, None);
-        return send(&mut stream, &[ServerMsg::Empty]);
+        return send(&mut stream, &[ServerMsg::Empty(EmptyReason::Refused)]);
     };
 
     if matches!(msg.request, Request::Hello) {
@@ -373,7 +374,7 @@ fn handle<S: Read + Write>(mut stream: S, state: Arc<State>) -> std::io::Result<
             }
             None => {
                 log_line(&state, None, "resolve-miss", started, 0, None);
-                send(&mut stream, &[ServerMsg::Empty])
+                send(&mut stream, &[ServerMsg::Empty(EmptyReason::Refused)])
             }
         };
     }
@@ -382,7 +383,7 @@ fn handle<S: Read + Write>(mut stream: S, state: Arc<State>) -> std::io::Result<
         Some(v) => v,
         None => {
             log_line(&state, None, "no-generation", started, 0, None);
-            return send(&mut stream, &[ServerMsg::Empty]);
+            return send(&mut stream, &[ServerMsg::Empty(EmptyReason::Refused)]);
         }
     };
     let gen_dir = state.gen_dir(&manifest_gen);
@@ -400,7 +401,11 @@ fn handle<S: Read + Write>(mut stream: S, state: Arc<State>) -> std::io::Result<
             "hello".to_string(),
         ),
         // Answered before this point; kept exhaustive.
-        Request::Resolve(_) => (vec![ServerMsg::Empty], None, "resolve".to_string()),
+        Request::Resolve(_) => (
+            vec![ServerMsg::Empty(EmptyReason::Refused)],
+            None,
+            "resolve".to_string(),
+        ),
         Request::Manifest => {
             let mut entries: Vec<ManifestEntry> = manifest
                 .pages
@@ -432,16 +437,32 @@ fn handle<S: Read + Write>(mut stream: S, state: Arc<State>) -> std::io::Result<
         Request::Image(id, offset) => match manifest.images.iter().find(|i| i.id == *id) {
             Some(def) => match fs::read(gen_dir.join(&def.file)) {
                 Ok(bytes) => (vec![image_frame(*id, &bytes, *offset)], Some(*id), "image".to_string()),
-                Err(_) => (vec![ServerMsg::Empty], Some(*id), "image-missing".to_string()),
+                Err(_) => (
+                vec![ServerMsg::Empty(EmptyReason::Missing)],
+                Some(*id),
+                "image-missing".to_string(),
+            ),
             },
-            None => (vec![ServerMsg::Empty], Some(*id), "image-unknown".to_string()),
+            None => (
+                vec![ServerMsg::Empty(EmptyReason::Missing)],
+                Some(*id),
+                "image-unknown".to_string(),
+            ),
         },
         Request::ImageStream(id, offset) => match manifest.images.iter().find(|i| i.id == *id) {
             Some(def) => match fs::read(gen_dir.join(&def.file)) {
                 Ok(bytes) => (image_frames(*id, &bytes, *offset), Some(*id), "image-stream".to_string()),
-                Err(_) => (vec![ServerMsg::Empty], Some(*id), "image-missing".to_string()),
+                Err(_) => (
+                vec![ServerMsg::Empty(EmptyReason::Missing)],
+                Some(*id),
+                "image-missing".to_string(),
+            ),
             },
-            None => (vec![ServerMsg::Empty], Some(*id), "image-unknown".to_string()),
+            None => (
+                vec![ServerMsg::Empty(EmptyReason::Missing)],
+                Some(*id),
+                "image-unknown".to_string(),
+            ),
         },
         Request::Page(id) => {
             let out = serve_page(&state, &manifest, &gen_dir, &session, *id, &[], &msg.path, 0);
@@ -461,7 +482,7 @@ fn handle<S: Read + Write>(mut stream: S, state: Arc<State>) -> std::io::Result<
         .iter()
         .map(|m| match m {
             ServerMsg::Page { data, .. } | ServerMsg::Image { data, .. } => data.len(),
-            ServerMsg::Empty => 16,
+            ServerMsg::Empty(_) => 17,
             ServerMsg::Hello { .. } => 2,
             _ => 0,
         })
@@ -472,7 +493,7 @@ fn handle<S: Read + Write>(mut stream: S, state: Arc<State>) -> std::io::Result<
 
 fn outcome(responses: &[ServerMsg]) -> String {
     match responses.first() {
-        Some(ServerMsg::Empty) | None => "fail".to_string(),
+        Some(ServerMsg::Empty(_)) | None => "fail".to_string(),
         Some(ServerMsg::Page { id, .. }) => format!("ok:{id}"),
         _ => "ok".to_string(),
     }
@@ -523,15 +544,17 @@ fn serve_page(
     depth: u8,
 ) -> Vec<ServerMsg> {
     let Some(def) = manifest.pages.iter().find(|p| p.id == id) else {
-        return vec![ServerMsg::Empty];
+        // 没有这一页：地址不存在，不是故障。
+                return vec![ServerMsg::Empty(EmptyReason::Missing)];
     };
 
     if def.kind != "dynamic" {
         let Ok(bytes) = fs::read(gen_dir.join(&def.file)) else {
-            return vec![ServerMsg::Empty];
+            // 静态文件读不到：这一代坏了。
+                        return vec![ServerMsg::Empty(EmptyReason::Failed)];
         };
         if bytes.len() > CHUNK {
-            return vec![ServerMsg::Empty];
+            return vec![ServerMsg::Empty(EmptyReason::Failed)];
         }
         return vec![page_frame(id, &bytes, 0)];
     }
@@ -539,13 +562,14 @@ fn serve_page(
     // Allow one redirect so a form handler can POST, write, then redirect back
     // to itself. A second redirect is treated as a loop.
     if depth >= 2 {
-        return vec![ServerMsg::Empty];
+        // 重定向套重定向：当成环，不是页面写错。
+                return vec![ServerMsg::Empty(EmptyReason::Refused)];
     }
 
     match run_python(state, gen_dir, &def.file, id, fields, session, path) {
         Ok(PyOut::Body(bytes)) => {
             if bytes.len() > CHUNK {
-                return vec![ServerMsg::Empty];
+                return vec![ServerMsg::Empty(EmptyReason::Failed)];
             }
             vec![page_frame(id, &bytes, 0)]
         }
@@ -562,7 +586,8 @@ fn serve_page(
             };
             serve_page(state, manifest, gen_dir, session, target, &[], &next, depth + 1)
         }
-        Err(_) => vec![ServerMsg::Empty],
+        // 页面崩了、超时了、输出超上限：这是故障，不是「没有这一页」。
+        Err(_) => vec![ServerMsg::Empty(EmptyReason::Failed)],
     }
 }
 

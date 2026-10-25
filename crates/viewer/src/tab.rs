@@ -331,26 +331,35 @@ impl Tab {
         self.fetcher.page(id, path);
     }
 
-    pub(crate) fn accept_page(&mut self, id: u16, text: Option<String>) {
+    pub(crate) fn accept_page(
+        &mut self,
+        id: u16,
+        text: Option<String>,
+        reason: Option<protocol::EmptyReason>,
+    ) {
         self.loading = false;
         match text {
             Some(text) => self.apply(id, &text),
             None => {
                 self.page_id = Some(id);
-                self.fail("页面加载失败");
+                // 「没有这一页」和「这一页崩了」是两件事，不能共用一句话。
+                self.fail(match reason {
+                    Some(protocol::EmptyReason::Missing) => "没有这一页",
+                    Some(protocol::EmptyReason::Refused) => "服务器不肯给这一页",
+                    Some(protocol::EmptyReason::Failed) => "页面出错了",
+                    // 服务器没说是哪一种：跟以前的文案一致，不猜。
+                    _ => "页面加载失败",
+                });
             }
         }
     }
 
     pub(crate) fn apply(&mut self, id: u16, text: &str) {
         self.blocks = markup::parse(text);
-        self.title = self
-            .blocks
-            .iter()
-            .find_map(|b| match b {
-                Block::Heading(_, parts) => Some(markup::plain(parts)),
-                _ => None,
-            })
+        // 窗口标题 = 正文里第一个标题。必须往嵌套里找 —— 页面常常把整个正文包在
+        // `[[box class=page]]` 里，只看顶层就一个标题都找不到（文章页曾经因此
+        // 一律显示发布时的固定标题）。
+        self.title = crate::render::first_heading(&self.blocks)
             .or_else(|| {
                 self.entries
                     .iter()

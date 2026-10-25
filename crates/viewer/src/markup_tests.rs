@@ -1,6 +1,5 @@
 //! `markup` 的测试。搬出来单独一个文件，解析器本体才看得清。
 
-use super::*;
     use super::*;
 
     fn only(blocks: &[Block]) -> &Block {

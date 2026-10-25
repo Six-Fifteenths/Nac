@@ -9,7 +9,7 @@ nac.p("这一页讲最底层的行标记——也就是 ", nac.tt("nac"), " 最�
 nac.p("平时用辅助函数就够了；标记本身值得知道，因为 ", nac.tt("nac.raw()"), " 可以直接写它。")
 nac.gap()
 
-with nac.tip("先看结论"):
+with nac.note("info", "先看结论"):
     nac.p("标记是按行解析的，每种标记占一整行；只有行内样式和行内链接可以出现在段落中间。")
 
 nac.gap()
@@ -57,7 +57,7 @@ nac.table(
         (nac.tt("[[code python]]"), nac.tt("[[end]]"), "带语言名的代码块"),
     ],
 )
-with nac.warn("[[end]] 必须对得上"):
+with nac.note("warn", "[[end]] 必须对得上"):
     nac.p("少写一个，后面的内容会被吞进容器里。多写一个会被忽略（当空行处理）。")
 
 nac.gap()
@@ -82,7 +82,7 @@ nac.p("三个数字是图片 id、显示宽度百分比、原始宽高；客户�
 
 nac.gap()
 nac.h2("版本不一致会怎样")
-with nac.danger("未知指令不会被吞掉"):
+with nac.note("danger", "未知指令不会被吞掉"):
     nac.p("如果客户端不认识某个 ", nac.tt("[["), " 指令，它会把整行当普通文字显示。")
     nac.p("所以升级客户端之前，新标记会明明白白露出来，而不是悄悄消失。")
 

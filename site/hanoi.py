@@ -18,7 +18,7 @@ if nac.submitted():
     if levels.isdigit() and 1 <= int(levels) <= 7:
         nac.redirect_path("/hanoi/%d" % int(levels))
     else:
-        with nac.warn("这个层数不合适"):
+        with nac.note("warn", "这个层数不合适"):
             nac.p("1 到 7 之间填一个整数。再往上这一页装不下 —— 页面上限 16 KB。")
 
 nac.gap()

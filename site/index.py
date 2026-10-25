@@ -63,4 +63,4 @@ nac.table(
     ],
 )
 nac.gap()
-nac.home()
+nac.link_path("/", "回首页")

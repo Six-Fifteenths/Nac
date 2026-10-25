@@ -220,8 +220,8 @@ fn fetch(
                     break;
                 }
             }
-            Some(ServerMsg::Empty) => {
-                println!("EMPTY");
+            Some(ServerMsg::Empty(reason)) => {
+                println!("EMPTY ({reason:?})");
                 return Ok(());
             }
             other => return Err(format!("unexpected: {other:?}")),
@@ -253,8 +253,8 @@ fn fetch_stream(addr: &str, session: [u8; SESSION_LEN], id: u16) -> Result<(), S
                     break;
                 }
             }
-            ServerMsg::Empty => {
-                println!("EMPTY");
+            ServerMsg::Empty(reason) => {
+                println!("EMPTY ({reason:?})");
                 return Ok(());
             }
             other => return Err(format!("unexpected: {other:?}")),
@@ -291,7 +291,7 @@ fn print_msgs(msgs: Vec<ServerMsg>, id: u16, _image: bool) -> Result<(), String>
                 tls,
                 title,
             } => println!("{name} -> {endpoint} tls={tls} {title}"),
-            ServerMsg::Empty => println!("EMPTY"),
+            ServerMsg::Empty(reason) => println!("EMPTY ({reason:?})"),
         }
     }
     Ok(())

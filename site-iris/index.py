@@ -11,14 +11,12 @@ nac.h1("iris.out")
 nac.p("一个清单：看过、听过、待过的东西。没有推荐，只有记录。")
 nac.gap()
 
-nac.defs(
-    [
-        ("条目", "%d 条" % len(items)),
-        ("按种类", "、".join("%s %d" % pair for pair in iris.counts(items))),
-        ("平均分", "%.1f / 5" % iris.average(items)),
-        ("年份跨度", iris.span(items)),
-    ]
-)
+nac.table(("条目", "说明"), [
+    ("条目", "%d 条" % len(items)),
+    ("按种类", "、".join("%s %d" % pair for pair in iris.counts(items))),
+    ("平均分", "%.1f / 5" % iris.average(items)),
+    ("年份跨度", iris.span(items)),
+])
 nac.gap()
 
 rows = []

@@ -31,7 +31,7 @@ nac.p(nac.i("改完按「保存」。密码留空就是不修改。"))
 nac.gap()
 
 if done:
-    with nac.ok("已保存"):
+    with nac.note("ok", "已保存"):
         nac.p("改动已经写进去。")
 else:
     ui.errors(message)

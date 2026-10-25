@@ -10,6 +10,7 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::thread;
 
 use crate::net::{Client, Entry, Found};
+use protocol::EmptyReason;
 use crate::routes::TlsMode;
 
 pub enum Job {
@@ -27,8 +28,12 @@ pub enum Job {
 pub enum Msg {
     /// `None` means the server did not answer.
     Manifest(Option<Vec<Entry>>),
-    /// `None` means this page could not be fetched.
-    Page { id: u16, text: Option<String> },
+    /// `None` means the server had nothing; the reason says which kind of nothing.
+    Page {
+        id: u16,
+        text: Option<String>,
+        reason: Option<EmptyReason>,
+    },
     /// `None` means the server does not know that name.
     Resolved {
         name: String,
@@ -71,27 +76,36 @@ impl Fetcher {
                                         let _ = msg_tx.send(Msg::Page {
                                             id,
                                             text: Some(text.clone()),
+                                            reason: None,
                                         });
                                         continue;
                                     }
                                 }
                             }
                         }
-                        let text = client.page(id, &path).ok();
+                        let (text, reason) = match client.page(id, &path) {
+                            Ok(text) => (Some(text), None),
+                            Err(reason) => (None, Some(reason)),
+                        };
                         if let (Some(entry), Some(text)) = (entries.get(&id), &text) {
                             if !entry.dynamic {
                                 static_cache.insert(id, (entry.hash, text.clone()));
                             }
                         }
-                        Msg::Page { id, text }
+                        Msg::Page { id, text, reason }
                     }
                     Job::Submit { id, path, fields } => {
                         match client.submit(id, fields, &path) {
                             Ok((id, text)) => Msg::Page {
                                 id,
                                 text: Some(text),
+                                reason: None,
                             },
-                            Err(_) => Msg::Page { id, text: None },
+                            Err(reason) => Msg::Page {
+                                id,
+                                text: None,
+                                reason: Some(reason),
+                            },
                         }
                     }
                     Job::Resolve(name) => {

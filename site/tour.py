@@ -47,13 +47,13 @@ nac.p("第一行是表头；单元格里能用粗体、等宽和行内链接。"
 nac.gap()
 
 nac.h2("提示框")
-with nac.tip("提示"):
+with nac.note("info", "提示"):
     nac.p("蓝色框，放补充说明。")
-with nac.ok("成功"):
+with nac.note("ok", "成功"):
     nac.p("绿色框，放「操作完成」这类信息。")
-with nac.warn("注意"):
+with nac.note("warn", "注意"):
     nac.p("黄色框，放容易踩的坑。")
-with nac.danger("危险"):
+with nac.note("danger", "危险"):
     nac.p("红色框，放不可逆的操作警告。")
 nac.gap()
 

@@ -24,4 +24,4 @@ nac.bullets(
     "代名 %s" % nac.GEN,
 )
 nac.gap()
-nac.home()
+nac.link_path("/", "回首页")

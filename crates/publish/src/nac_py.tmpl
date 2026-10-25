@@ -189,11 +189,6 @@ def _row(cells):
     return "| " + " | ".join(_cell(c) for c in cells) + " |"
 
 
-def defs(pairs):
-    """键值表，等于两列的 table。"""
-    table(("条目", "说明"), pairs)
-
-
 def hr():
     """分隔线。"""
     _buf.append("---")
@@ -245,9 +240,8 @@ def cols(n=2):
             nac.h2("右")
 
     不写 nac.col() 时按块数平均切；写了就按你给的位置切（此时 n 被忽略）。
-    最多 4 列。
     """
-    with _section("[[cols %d]]" % max(1, min(4, int(n)))):
+    with _section("[[cols %d]]" % max(1, int(n))):
         yield
 
 
@@ -261,26 +255,6 @@ def note(kind="info", title=""):
     spec = kind if not title else "%s|%s" % (kind, _cell(title))
     with _section("[[note %s]]" % spec):
         yield
-
-
-def tip(title=""):
-    """蓝色提示框。"""
-    return note("info", title)
-
-
-def ok(title=""):
-    """绿色成功框。"""
-    return note("ok", title)
-
-
-def warn(title=""):
-    """黄色警告框。"""
-    return note("warn", title)
-
-
-def danger(title=""):
-    """红色错误框。"""
-    return note("danger", title)
 
 
 @contextmanager
@@ -422,11 +396,6 @@ def nav(*paths):
         name = "首页" if _url(path) == "/" else str(path).strip("/") or "/"
         parts.append("[[path:%s|%s]]" % (_url(path), _cell(name)))
     _buf.append(" › ".join(parts))
-
-
-def home():
-    """回首页的一行链接。"""
-    link_path("/", "回首页")
 
 
 def _redirect(page, path):
@@ -1006,21 +975,26 @@ text = _Group(
     "text",
     p=p, h1=h1, h2=h2, h3=h3, b=b, i=i, tt=tt, join=join, esc=esc,
     code=code, quote=quote, bullets=bullets, ordered=ordered,
-    table=table, defs=defs, hr=hr, gap=gap, write=write, raw=raw,
+    table=table, hr=hr, gap=gap, write=write, raw=raw,
 )
 
 links = _Group(
     "links",
     link_path=link_path, inline_path=inline_path, inline_url=inline_url,
-    nav=nav, home=home, redirect_path=redirect_path,
+    nav=nav, redirect_path=redirect_path,
 )
 
 skin = _Group(
     "skin",
-    note=note, tip=tip, ok=ok, warn=warn, danger=danger,
-    details=details, tabs=tabs, tab=tab,
-    sheet=sheet, box=box, avatar=avatar,
-    img=img, cap=cap, figure=figure,
+    box=box, cols=cols, col=col, note=note, details=details, tabs=tabs, tab=tab,
+    sheet=sheet,
+)
+
+media = _Group(
+    "media",
+    img=img, cap=cap, figure=figure, avatar=avatar,
+    term=term, term_ascii=term_ascii, term_line=term_line, term_blank=term_blank,
+    term_cursor=term_cursor, term_passwd=term_passwd,
 )
 
 forms = _Group(
@@ -1038,8 +1012,7 @@ req = _Group(
 
 state = _Group(
     "state",
-    session=session, save_session=save_session, session_get=session_get,
-    session_set=session_set,
+    save_session=save_session, session_get=session_get, session_set=session_set,
     session_pop=session_pop, flash=flash, flashes=flashes,
 )
 
@@ -1050,15 +1023,6 @@ data = _Group(
     data_dir=data_dir, data_path=data_path,
 )
 
-tty = _Group(
-    "tty",
-    term=term, term_ascii=term_ascii, term_line=term_line, term_blank=term_blank,
-    term_cursor=term_cursor, term_passwd=term_passwd,
-)
-
-site = _Group(
-    "site",
-    gen=gen, title_of=title_of, url=url, pages=pages,
-)
+site = _Group("site", pages=pages, title_of=title_of, url=url, gen=gen)
 
 flow = _Group("flow", done=done, stop=stop, flush=flush)

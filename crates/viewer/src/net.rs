@@ -5,7 +5,9 @@ use std::time::Duration;
 use crate::routes::TlsMode;
 use crate::tls::ReadWrite;
 
-use protocol::{decode_server, encode_client, ClientMsg, Request, ServerMsg, SESSION_LEN};
+use protocol::{
+    decode_server, encode_client, ClientMsg, EmptyReason, Request, ServerMsg, SESSION_LEN,
+};
 
 #[derive(Clone, Debug)]
 pub struct Entry {
@@ -106,10 +108,13 @@ impl Client {
         }
     }
 
-    pub fn page(&mut self, id: u16, path: &str) -> Result<String, ()> {
-        match self.call(Request::Page(id), path)? {
-            ServerMsg::Page { data, .. } => String::from_utf8(data).map_err(|_| ()),
-            _ => Err(()),
+    pub fn page(&mut self, id: u16, path: &str) -> Result<String, EmptyReason> {
+        match self.call(Request::Page(id), path).map_err(|_| EmptyReason::Failed)? {
+            ServerMsg::Page { data, .. } => {
+                String::from_utf8(data).map_err(|_| EmptyReason::Failed)
+            }
+            ServerMsg::Empty(reason) => Err(reason),
+            _ => Err(EmptyReason::Failed),
         }
     }
 
@@ -118,13 +123,17 @@ impl Client {
         id: u16,
         fields: Vec<(String, String)>,
         path: &str,
-    ) -> Result<(u16, String), ()> {
-        match self.call(Request::Submit(id, fields), path)? {
+    ) -> Result<(u16, String), EmptyReason> {
+        match self
+            .call(Request::Submit(id, fields), path)
+            .map_err(|_| EmptyReason::Failed)?
+        {
+            ServerMsg::Empty(reason) => Err(reason),
             ServerMsg::Page { id, data, .. } => Ok((
                 id,
-                String::from_utf8(data).map_err(|_| ())?,
+                String::from_utf8(data).map_err(|_| EmptyReason::Failed)?,
             )),
-            _ => Err(()),
+            _ => Err(EmptyReason::Failed),
         }
     }
 

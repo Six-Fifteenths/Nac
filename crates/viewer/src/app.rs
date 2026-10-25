@@ -12,7 +12,9 @@ impl eframe::App for Viewer {
             for msg in self.tabs[index].fetcher.drain() {
                 match msg {
                     fetch::Msg::Manifest(entries) => self.tabs[index].accept_manifest(entries),
-                    fetch::Msg::Page { id, text } => self.tabs[index].accept_page(id, text),
+                    fetch::Msg::Page { id, text, reason } => {
+                        self.tabs[index].accept_page(id, text, reason)
+                    }
                     fetch::Msg::Resolved { name, found } => {
                         self.tabs[index].accept_resolved(&mut self.routes, name, found)
                     }

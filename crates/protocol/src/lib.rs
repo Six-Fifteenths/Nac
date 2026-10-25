@@ -12,6 +12,30 @@ pub const MAX_FRAME: usize = 32768;
 pub const CHUNK: usize = 16384;
 pub const SESSION_LEN: usize = 16;
 
+/// 空响应为什么空。0 是「以前没有这个字段」，读成 Missing 最保守。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EmptyReason {
+    /// 老服务器没发这个字节：分不清是哪一种，客户端只能说一句笼统的。
+    Unknown = 0,
+    /// 地址没有对应的页，或者页面自己 `nac.stop()` 了。
+    Missing = 1,
+    /// 页面跑失败了：崩了、超时了、输出超上限。
+    Failed = 2,
+    /// 服务器不认这个请求（协议不对、重定向成环）。
+    Refused = 3,
+}
+
+impl EmptyReason {
+    fn from_byte(b: u8) -> EmptyReason {
+        match b {
+            1 => EmptyReason::Missing,
+            2 => EmptyReason::Failed,
+            3 => EmptyReason::Refused,
+            _ => EmptyReason::Unknown,
+        }
+    }
+}
+
 const T_REQ: u8 = 0x01;
 const T_SUBMIT: u8 = 0x02;
 const T_MANIFEST: u8 = 0x81;
@@ -89,7 +113,9 @@ pub enum ServerMsg {
         offset: u32,
         data: Vec<u8>,
     },
-    Empty,
+    /// 服务器没有内容可给。`reason` 说清是哪一种「没有」—— 老客户端会忽略
+    /// 这个字节，仍然只显示一句「加载失败」。
+    Empty(EmptyReason),
 }
 
 // ---------------------------------------------------------------- encoding
@@ -247,7 +273,11 @@ pub fn encode_server(msg: &ServerMsg) -> Vec<u8> {
             p.extend_from_slice(data);
             frame(T_IMAGE, &p)
         }
-        ServerMsg::Empty => frame(T_EMPTY, &[0u8; SESSION_LEN]),
+        ServerMsg::Empty(reason) => {
+            let mut payload = vec![0u8; SESSION_LEN];
+            payload.push(*reason as u8);
+            frame(T_EMPTY, &payload)
+        }
     }
 }
 
@@ -481,7 +511,16 @@ pub fn decode_server(buf: &[u8]) -> Option<ServerMsg> {
                 })
             }
         }
-        T_EMPTY => Some(ServerMsg::Empty),
+        T_EMPTY => {
+            // 老服务器只发会话号；新服务器多发一个原因字节。两种都认。
+            let _session = r.bytes(SESSION_LEN)?;
+            let reason = if r.done() {
+                EmptyReason::Unknown
+            } else {
+                EmptyReason::from_byte(r.u8()?)
+            };
+            Some(ServerMsg::Empty(reason))
+        }
         _ => None,
     }
 }
@@ -583,7 +622,7 @@ mod tests {
                 offset: 4,
                 data: vec![1, 2, 3, 4, 5],
             },
-            ServerMsg::Empty,
+            ServerMsg::Empty(EmptyReason::Missing),
         ];
         for m in msgs {
             let bytes = encode_server(&m);
