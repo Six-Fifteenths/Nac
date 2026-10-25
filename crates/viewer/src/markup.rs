@@ -166,6 +166,12 @@ pub enum Block {
         name: String,
         label: String,
     },
+    /// `[[prefill 名|值]]`: give a field its starting text, once. A later frame
+    /// must not put it back, or every keystroke would be undone.
+    Prefill {
+        name: String,
+        value: String,
+    },
     /// `[[scene WxH seconds]] … [[end]]`: a timeline of rectangles the client
     /// interpolates. The page decides what moves and when; nothing here is
     /// specific to any one demo.
@@ -411,6 +417,16 @@ fn parse_one(lines: &[&str], i: &mut usize) -> Option<Block> {
             name,
             label,
             secret: true,
+        });
+    }
+
+    if let Some(rest) = t.strip_prefix("[[prefill ") {
+        *i += 1;
+        let rest = inner_spec(rest);
+        let (name, value) = rest.split_once('|').unwrap_or((rest, ""));
+        return Some(Block::Prefill {
+            name: name.trim().to_string(),
+            value: value.to_string(),
         });
     }
 

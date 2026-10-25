@@ -510,6 +510,19 @@ def hidden(name, value):
     _buf.append("[[hidden %s|%s]]" % (_cell(name), _cell(value)))
 
 
+def prefill(name, value):
+    """给一个字段填上初始文字；只在读者还没动过它的时候生效。
+
+    编辑已有内容时用：先 prefill 再把控件画出来，框里就是原文。
+    """
+    if value is None:
+        return
+    # 一行标记装不下换行：先转义成 \n，再让 _cell 处理竖线和方括号。
+    # 顺序不能反：_cell 会把换行压成空格，那就还原不出来了。
+    text = str(value).replace("\\", "\\\\").replace("\n", "\\n")
+    _buf.append("[[prefill %s|%s]]" % (_cell(name), _cell(text)))
+
+
 def button(label):
     """提交按钮。一页里最后一个按钮决定提交目标，通常只放一个。"""
     _buf.append("[[button %s]]" % _cell(label))

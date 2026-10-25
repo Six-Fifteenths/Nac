@@ -182,6 +182,14 @@ fn should_sync_address(
     shown != want && !holding && (!focused || !edited)
 }
 
+/// One line of markup cannot carry a newline, so `\n` stands for one. A literal
+/// backslash is sent as `\\`, which keeps the round trip exact.
+fn unescape_lines(text: &str) -> String {
+    text.replace("\\\\", "\u{1}")
+        .replace("\\n", "\n")
+        .replace('\u{1}', "\\")
+}
+
 /// Palette of a `[[term]]` panel. These are the WebShell defaults, so a page can
 /// reproduce that look without the client knowing what a "terminal site" is.
 const TERM_BG: Color32 = Color32::from_rgb(0x0C, 0x06, 0x23);
@@ -2072,6 +2080,13 @@ impl Tab {
                 Block::Hidden { name, value } => {
                     self.fields.insert(name.clone(), value.clone());
                 }
+                Block::Prefill { name, value } => {
+                    // Only if nobody has typed into it yet: putting the starting
+                    // text back every frame would erase what the reader types.
+                    if !self.fields.contains_key(&name) {
+                        self.fields.insert(name, unescape_lines(&value));
+                    }
+                }
                 Block::Scene {
                     width,
                     height,
@@ -2653,7 +2668,7 @@ impl eframe::App for Viewer {
 mod tests {
     use super::{
         active_after_close, looks_like_host, net, normalize_path, parse_address,
-        resolve_address, resolve_path, routes, shorten, should_sync_address, stash_fields,
+        resolve_address, resolve_path, routes, shorten, should_sync_address, stash_fields, unescape_lines,
         Address, Place, Trail,
     };
     use std::collections::HashMap;
@@ -2916,6 +2931,15 @@ mod tests {
         assert!(!looks_like_host(""));
         assert!(!looks_like_host("about"));
         assert!(!looks_like_host("127.0.0.1:7000"));
+    }
+
+    #[test]
+    fn prefilled_text_gets_its_newlines_back() {
+        // One markup line cannot hold a newline, so pages send `\n`.
+        assert_eq!(unescape_lines("a\\n\\nb"), "a\n\nb");
+        assert_eq!(unescape_lines("no escapes"), "no escapes");
+        // A real backslash is doubled by the page, and must come back singly.
+        assert_eq!(unescape_lines("50\\\\%"), "50\\%");
     }
 
     #[test]
