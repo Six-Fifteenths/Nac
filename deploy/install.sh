@@ -96,6 +96,25 @@ install -m 0755 -o root -g root "$FROM/contentd" "$DEST/bin/contentd"
 install -m 0755 -o root -g root "$FROM/publish" "$DEST/bin/publish"
 install -m 0755 -o root -g root "$FROM/probe" "$DEST/bin/probe"
 
+# 站点注册表：谁在哪儿。客户端遇到不认识的名字就来问，服务器照这张表回答。
+# 现在只有本机这一个站；`deploy/add-site.sh` 会往里加行。
+HOST_HINT=${NAC_HOST:-}
+if [ -z "$HOST_HINT" ]; then
+    HOST_HINT=$(hostname -I 2>/dev/null | awk '{print $1}')
+fi
+if [ -z "$HOST_HINT" ]; then
+    HOST_HINT=127.0.0.1
+fi
+if [ ! -s "$DEST/sites.json" ]; then
+    cat > "$DEST/sites.json" <<EOF
+{
+  "home": {"host": "$HOST_HINT", "port": 7000, "tls": true, "title": "主站"}
+}
+EOF
+fi
+chown root:"$SHARE_GROUP" "$DEST/sites.json"
+chmod 0644 "$DEST/sites.json"
+
 echo "== 页面源码"
 if [ "$KEEP_SITE" = 1 ] && [ -d "$DEST/site" ] && [ -d "$DEST/admin/site" ]; then
     echo "保留现有 $DEST/site 与 $DEST/admin/site（--keep-site）"

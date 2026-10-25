@@ -78,6 +78,38 @@ fn main() {
                 }
                 _ => Err("empty manifest".into()),
             }),
+        // `probe resolve shop` — the ops way to check a registry entry: this is
+        // exactly the question a client asks when it meets an unknown name.
+        "resolve" => {
+            let name = args.first().cloned().unwrap_or_default();
+            if name.is_empty() {
+                Err("resolve 需要站点名".to_string())
+            } else {
+                call(
+                    &addr,
+                    ClientMsg {
+                        session,
+                        path: path.clone(),
+                        request: Request::Resolve(name),
+                    },
+                )
+                .and_then(|msgs| match msgs.first() {
+                    Some(ServerMsg::Resolved {
+                        name,
+                        endpoint,
+                        tls,
+                        title,
+                    }) => {
+                        println!(
+                            "{name} -> {endpoint}  {}  {title}",
+                            if *tls { "tls" } else { "plain" }
+                        );
+                        Ok(())
+                    }
+                    _ => Err("这个站它不认识（EMPTY）".to_string()),
+                })
+            }
+        }
         "page" => {
             let id = parse_id(&args);
             fetch(&addr, session, id, false, &path)

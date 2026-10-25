@@ -1,0 +1,53 @@
+[Unit]
+Description=nac content server (site @NAME@)
+After=network.target
+
+[Service]
+Type=simple
+User=nac-public
+Group=nac-public
+SupplementaryGroups=nac-share
+WorkingDirectory=@DATA@
+# 每个站点一个进程、一个端口、一个数据目录。它们之间没有共享内存、没有共享
+# 数据库，能看到的对方只有注册表里的那几行地址。
+ExecStart=/srv/nac/bin/contentd \
+    --data @DATA@ \
+    --port @PORT@ \
+    --bind @BIND@ \
+    --name @NAME@ \
+    --registry /srv/nac/sites.json \
+    --tls-cert /etc/ssl/nac/public.crt \
+    --tls-key /etc/ssl/nac/public.key \
+    --log @DATA@/access.jsonl \
+    --session-ttl-hours 168
+Restart=always
+RestartSec=2
+
+# --- 提权面：全部关掉 ---
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictNamespaces=yes
+
+# --- 文件系统：只读 + 仅有的可写范围 ---
+ProtectSystem=strict
+ReadWritePaths=@DATA@/state @DATA@/appdata @DATA@/access.jsonl
+InaccessiblePaths=/srv/nac/admin
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+UMask=0007
+MemoryMax=256M
+TasksMax=128
+LimitNOFILE=1024
+ProtectProc=invisible
+ProcSubset=pid
+SystemCallFilter=~@debug
+
+[Install]
+WantedBy=multi-user.target
