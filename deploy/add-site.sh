@@ -42,7 +42,13 @@ while [ $# -gt 0 ]; do
 done
 
 [ -n "$NAME" ] || { echo "用法：$0 <站点名> [--port N] [--host IP]" >&2; exit 2; }
-case "$NAME" in
+
+# 参数可能带着粘贴时的空白或回车（跨平台编辑最容易带进来的就是 \r）。
+for value in NAME PORT HOST BIND; do
+    eval "value_text=\$$value"
+    trimmed=$(printf '%s' "$value_text" | tr -d '[:space:]')
+    eval "$value=\$trimmed"
+donecase "$NAME" in
     *[!a-z0-9-]*|'') echo "站点名只能用小写字母、数字和连字符：$NAME" >&2; exit 2 ;;
 esac
 
