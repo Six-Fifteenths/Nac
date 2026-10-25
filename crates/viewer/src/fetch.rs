@@ -9,13 +9,15 @@ use std::collections::HashMap;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::thread;
 
-use crate::net::{Client, Entry};
+use crate::net::{Client, Entry, Found};
 use crate::routes::TlsMode;
 
 pub enum Job {
     Manifest,
     Page(u16),
     Submit(u16, Vec<(String, String)>),
+    /// Ask the server we are on where another site lives.
+    Resolve(String),
 }
 
 pub enum Msg {
@@ -23,6 +25,11 @@ pub enum Msg {
     Manifest(Option<Vec<Entry>>),
     /// `None` means this page could not be fetched.
     Page { id: u16, text: Option<String> },
+    /// `None` means the server does not know that name.
+    Resolved {
+        name: String,
+        found: Option<Found>,
+    },
 }
 
 pub struct Fetcher {
@@ -81,6 +88,10 @@ impl Fetcher {
                         },
                         Err(_) => Msg::Page { id, text: None },
                     },
+                    Job::Resolve(name) => {
+                        let found = client.resolve(&name).ok();
+                        Msg::Resolved { name, found }
+                    }
                 };
                 if msg_tx.send(msg).is_err() {
                     break;
@@ -111,6 +122,10 @@ impl Fetcher {
 
     pub fn submit(&mut self, id: u16, fields: Vec<(String, String)>) {
         self.send(Job::Submit(id, fields));
+    }
+
+    pub fn resolve(&mut self, name: String) {
+        self.send(Job::Resolve(name));
     }
 
     pub fn drain(&mut self) -> Vec<Msg> {

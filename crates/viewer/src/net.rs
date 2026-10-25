@@ -16,6 +16,14 @@ pub struct Entry {
     pub path: String,
 }
 
+/// What a `Resolve` came back with.
+#[derive(Clone, Debug)]
+pub struct Found {
+    pub endpoint: String,
+    pub tls: bool,
+    pub title: String,
+}
+
 pub struct Client {
     pub addr: String,
     pub session: [u8; SESSION_LEN],
@@ -51,9 +59,26 @@ impl Client {
         decode_server(&frame).ok_or(())
     }
 
-    pub fn hello(&mut self) -> Result<u16, ()> {
+    pub fn hello(&mut self) -> Result<(u16, String), ()> {
         match self.call(Request::Hello)? {
-            ServerMsg::Hello { version } => Ok(version),
+            ServerMsg::Hello { version, site } => Ok((version, site)),
+            _ => Err(()),
+        }
+    }
+
+    /// Asks this server where another site lives. `None` means it does not know.
+    pub fn resolve(&mut self, name: &str) -> Result<Found, ()> {
+        match self.call(Request::Resolve(name.to_string()))? {
+            ServerMsg::Resolved {
+                endpoint,
+                tls,
+                title,
+                ..
+            } => Ok(Found {
+                endpoint,
+                tls,
+                title,
+            }),
             _ => Err(()),
         }
     }

@@ -166,6 +166,25 @@ impl Routes {
             Some(routes)
         }
     }
+
+    /// Adds or replaces a site learned at runtime. A server answering `Resolve`
+    /// is the only source of these, so the seeded table stays the trust anchor.
+    pub fn learn(&mut self, name: &str, endpoint: &str, tls: TlsMode) {
+        let endpoint = with_default_port(endpoint.to_string());
+        match self.sites.iter_mut().find(|site| site.name == name) {
+            Some(site) => {
+                site.endpoint = endpoint;
+                site.tls = tls;
+            }
+            None => self.sites.push(Site {
+                name: name.to_string(),
+                endpoint,
+                default: false,
+                tls,
+                ssh: None,
+            }),
+        }
+    }
 }
 
 /// Files to try, in order, for a viewer running at `exe`.

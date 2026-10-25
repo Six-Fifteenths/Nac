@@ -7,7 +7,7 @@
 //! No magic bytes, no version field: both are fingerprints.
 //! Every decoder returns `None` on anything malformed, and never panics.
 
-pub const VERSION: u16 = 3;
+pub const VERSION: u16 = 4;
 pub const MAX_FRAME: usize = 32768;
 pub const CHUNK: usize = 16384;
 pub const SESSION_LEN: usize = 16;
@@ -19,6 +19,7 @@ const T_PAGE: u8 = 0x82;
 const T_IMAGE: u8 = 0x83;
 const T_EMPTY: u8 = 0x84;
 const T_HELLO: u8 = 0x85;
+const T_RESOLVED: u8 = 0x86;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ManifestEntry {
@@ -38,6 +39,10 @@ pub enum Request {
     Image(u16, u32),
     ImageStream(u16, u32),
     Submit(u16, Vec<(String, String)>),
+    /// Asks a server where another site lives. Every server answers from its own
+    /// registry, so a network can grow by sites knowing about each other instead
+    /// of by one central table.
+    Resolve(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -48,7 +53,18 @@ pub struct ClientMsg {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ServerMsg {
-    Hello { version: u16 },
+    Hello {
+        version: u16,
+        /// The name this server goes by, so the client never has to guess.
+        site: String,
+    },
+    /// Answer to `Request::Resolve`.
+    Resolved {
+        name: String,
+        endpoint: String,
+        tls: bool,
+        title: String,
+    },
     Manifest {
         session: [u8; SESSION_LEN],
         entries: Vec<ManifestEntry>,
@@ -123,12 +139,48 @@ pub fn encode_client(msg: &ClientMsg) -> Vec<u8> {
             }
             frame(T_SUBMIT, &p)
         }
+        Request::Resolve(name) => {
+            p.push(5);
+            let nb = name.as_bytes();
+            let nl = nb.len().min(u16::MAX as usize) as u16;
+            p.extend_from_slice(&nl.to_be_bytes());
+            p.extend_from_slice(&nb[..nl as usize]);
+            frame(T_REQ, &p)
+        }
     }
 }
 
 pub fn encode_server(msg: &ServerMsg) -> Vec<u8> {
     match msg {
-        ServerMsg::Hello { version } => frame(T_HELLO, &version.to_be_bytes()),
+        ServerMsg::Hello { version, site } => {
+            let mut p = Vec::with_capacity(4 + site.len());
+            p.extend_from_slice(&version.to_be_bytes());
+            let sb = site.as_bytes();
+            let sl = sb.len().min(u16::MAX as usize) as u16;
+            p.extend_from_slice(&sl.to_be_bytes());
+            p.extend_from_slice(&sb[..sl as usize]);
+            frame(T_HELLO, &p)
+        }
+        ServerMsg::Resolved {
+            name,
+            endpoint,
+            tls,
+            title,
+        } => {
+            let mut p = Vec::with_capacity(8 + name.len() + endpoint.len() + title.len());
+            for text in [name, endpoint] {
+                let b = text.as_bytes();
+                let l = b.len().min(u16::MAX as usize) as u16;
+                p.extend_from_slice(&l.to_be_bytes());
+                p.extend_from_slice(&b[..l as usize]);
+            }
+            p.push(u8::from(*tls));
+            let tb = title.as_bytes();
+            let tl = tb.len().min(u16::MAX as usize) as u16;
+            p.extend_from_slice(&tl.to_be_bytes());
+            p.extend_from_slice(&tb[..tl as usize]);
+            frame(T_RESOLVED, &p)
+        }
         ServerMsg::Manifest { session, entries } => {
             let mut p = Vec::with_capacity(32 + entries.len() * 32);
             p.extend_from_slice(session);
@@ -283,6 +335,14 @@ pub fn decode_client(buf: &[u8]) -> Option<ClientMsg> {
                 }
                 Request::ImageStream(id, off)
             }
+            5 => {
+                let nl = r.u16()? as usize;
+                let name = r.string(nl)?;
+                if !r.done() {
+                    return None;
+                }
+                Request::Resolve(name)
+            }
             _ => return None,
         },
         T_SUBMIT => {
@@ -314,10 +374,30 @@ pub fn decode_server(buf: &[u8]) -> Option<ServerMsg> {
     match t {
         T_HELLO => {
             let version = r.u16()?;
+            let sl = r.u16()? as usize;
+            let site = r.string(sl)?;
             if !r.done() {
                 return None;
             }
-            Some(ServerMsg::Hello { version })
+            Some(ServerMsg::Hello { version, site })
+        }
+        T_RESOLVED => {
+            let nl = r.u16()? as usize;
+            let name = r.string(nl)?;
+            let el = r.u16()? as usize;
+            let endpoint = r.string(el)?;
+            let tls = r.u8()? & 1 == 1;
+            let tl = r.u16()? as usize;
+            let title = r.string(tl)?;
+            if !r.done() {
+                return None;
+            }
+            Some(ServerMsg::Resolved {
+                name,
+                endpoint,
+                tls,
+                title,
+            })
         }
         T_MANIFEST => {
             let session: [u8; SESSION_LEN] = r.bytes(SESSION_LEN)?.try_into().ok()?;
@@ -442,7 +522,16 @@ mod tests {
             },
         ];
         let msgs = vec![
-            ServerMsg::Hello { version: VERSION },
+            ServerMsg::Hello {
+                version: VERSION,
+                site: "home".into(),
+            },
+            ServerMsg::Resolved {
+                name: "shop".into(),
+                endpoint: "199.7.140.217:7002".into(),
+                tls: true,
+                title: "商店".into(),
+            },
             ServerMsg::Manifest {
                 session: s(),
                 entries,

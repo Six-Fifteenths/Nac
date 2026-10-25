@@ -212,7 +212,7 @@ fn selftest_run(routes: &routes::Routes, site_name: &str) -> eframe::Result<()> 
     };
     let mut client = net::Client::with_tls(site.endpoint.clone(), site.tls);
     match client.hello() {
-        Ok(version) => println!("protocol: {version}"),
+        Ok((version, name)) => println!("protocol: {version}  site: {name}"),
         Err(()) => println!("protocol: legacy"),
     }
     match client.manifest() {
@@ -345,11 +345,17 @@ fn stash_fields(
 /// `home.nac.local/about`, and the legacy `home/7` / `nac://home/7`.
 /// Endpoints are not accepted here on purpose — they live in the routes file,
 /// so nothing the user types or sees has to contain one.
-fn parse_address(
-    input: &str,
-    routes: &routes::Routes,
-    current_site: &str,
-) -> Option<(String, String)> {
+/// A typed address, before anyone has checked that the site is reachable.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Address {
+    /// Already in the table (seeded or learned earlier).
+    Known { site: String, path: String },
+    /// Written with our own suffix but not in the table yet. The caller asks a
+    /// server where it lives instead of calling the address invalid.
+    Unknown { site: String, path: String },
+}
+
+fn parse_address(input: &str, routes: &routes::Routes, current_site: &str) -> Option<Address> {
     let mut s = input.trim();
     if let Some((_, rest)) = s.split_once("://") {
         s = rest;
@@ -359,32 +365,61 @@ fn parse_address(
     }
     let s = s.split(|c| c == '?' || c == '#').next().unwrap_or(s).trim();
     if s.is_empty() {
-        return Some((current_site.to_string(), "/".to_string()));
+        return Some(Address::Known {
+            site: current_site.to_string(),
+            path: "/".to_string(),
+        });
     }
 
     if !s.starts_with('/') {
-        if let Some((host, tail)) = s.split_once('/') {
-            if let Some(site) = origin_site(host, routes, current_site) {
-                return Some((site, normalize_path(&format!("/{tail}"))?));
-            }
-            if routes.get(host).is_some() {
-                return Some((host.to_string(), normalize_path(&format!("/{tail}"))?));
-            }
-        } else if let Some(site) = origin_site(s, routes, current_site) {
-            return Some((site, "/".to_string()));
-        } else if routes.get(s).is_some() {
-            return Some((s.to_string(), "/".to_string()));
+        let (host, path) = match s.split_once('/') {
+            Some((host, tail)) => (host, normalize_path(&format!("/{tail}"))?),
+            None => (s, "/".to_string()),
+        };
+        if let Some(site) = origin_site(host, routes, current_site) {
+            return Some(Address::Known { site, path });
         }
-
+        if routes.get(host).is_some() {
+            return Some(Address::Known {
+                site: host.to_string(),
+                path,
+            });
+        }
+        if let Some(name) = unknown_origin(host) {
+            return Some(Address::Unknown { site: name, path });
+        }
         // A bare word is a path on the current site; anything host-shaped
         // (dot, port, IPv6 bracket) is not.
         if s.contains('.') || s.contains(':') || s.contains('[') {
             return None;
         }
-        return Some((current_site.to_string(), normalize_path(&format!("/{s}"))?));
+        return Some(Address::Known {
+            site: current_site.to_string(),
+            path: normalize_path(&format!("/{s}"))?,
+        });
     }
 
-    Some((current_site.to_string(), normalize_path(s)?))
+    Some(Address::Known {
+        site: current_site.to_string(),
+        path: normalize_path(s)?,
+    })
+}
+
+/// `shop.nac.local` -> `Some("shop")`. Only single-label names count, so a typo
+/// like `a.b.nac.local` is still rejected instead of being looked up.
+fn unknown_origin(host: &str) -> Option<String> {
+    let suffix = format!(".{ORIGIN}");
+    let lowered = host.to_ascii_lowercase();
+    let prefix = lowered.strip_suffix(&suffix)?;
+    if prefix.is_empty()
+        || prefix.contains('.')
+        || !prefix
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-')
+    {
+        return None;
+    }
+    Some(prefix.to_string())
 }
 
 fn origin_site(host: &str, routes: &routes::Routes, current_site: &str) -> Option<String> {
@@ -483,6 +518,10 @@ struct Viewer {
     saved_fields: HashMap<u16, HashMap<String, String>>,
     shown_path: Option<String>,
     target: Option<Target>,
+    /// Set while a site name is being looked up: the path to open once it arrives.
+    pending_path: Option<String>,
+    /// The name currently being looked up, for the status line.
+    resolving: Option<String>,
 }
 
 impl Viewer {
@@ -531,6 +570,8 @@ impl Viewer {
             saved_fields: HashMap::new(),
             shown_path: None,
             target: start_page.map(Target::Page),
+            pending_path: None,
+            resolving: None,
         };
         v.addr_input = v.address_text();
         #[cfg(feature = "admin")]
@@ -587,6 +628,35 @@ impl Viewer {
     }
 
     /// Applies a manifest that arrived from the worker thread.
+    /// A `Resolve` came back. Either we learned where the site is, or nobody on
+    /// this connection knows that name.
+    fn accept_resolved(&mut self, name: String, found: Option<net::Found>) {
+        self.resolving = None;
+        self.loading = false;
+        let path = self.pending_path.take().unwrap_or_else(|| "/".to_string());
+        match found {
+            Some(found) => {
+                let tls = if found.tls {
+                    routes::TlsMode::On
+                } else {
+                    routes::TlsMode::Off
+                };
+                self.routes.learn(&name, &found.endpoint, tls);
+                self.connect(name, Some(Target::Path(path)));
+                // Until the first page arrives, the site's own name is the most
+                // useful thing the window can say.
+                if self.title.is_empty() {
+                    self.title = found.title;
+                }
+            }
+            None => {
+                self.failed = true;
+                self.error = format!("找不到站点 {name}");
+                self.pending_sync = true;
+            }
+        }
+    }
+
     fn accept_manifest(&mut self, entries: Option<Vec<net::Entry>>) {
         match entries {
             Some(entries) => {
@@ -667,7 +737,7 @@ impl Viewer {
     }
 
     fn go(&mut self, input: &str) {
-        let Some((site, path)) = parse_address(input, &self.routes, &self.site) else {
+        let Some(address) = parse_address(input, &self.routes, &self.site) else {
             self.failed = true;
             self.error = "地址无效".to_string();
             self.pending_sync = true;
@@ -676,11 +746,27 @@ impl Viewer {
         self.pending_sync = true;
         self.failed = false;
         self.error.clear();
-        if site != self.site {
-            self.connect(site, Some(Target::Path(path)));
-            return;
+        match address {
+            Address::Known { site, path } => {
+                if site != self.site {
+                    self.connect(site, Some(Target::Path(path)));
+                } else {
+                    self.open_path(&path);
+                }
+            }
+            // A name with our own suffix that the table has never heard of: ask
+            // the server we are on. This is what lets a site be added without
+            // reissuing the client.
+            Address::Unknown { site, path } => {
+                if self.resolving.as_deref() == Some(site.as_str()) {
+                    return;
+                }
+                self.pending_path = Some(path);
+                self.resolving = Some(site.clone());
+                self.loading = true;
+                self.fetcher.resolve(site);
+            }
         }
-        self.open_path(&path);
     }
 
     fn reload(&mut self) {
@@ -1378,6 +1464,7 @@ impl eframe::App for Viewer {
             match msg {
                 fetch::Msg::Manifest(entries) => self.accept_manifest(entries),
                 fetch::Msg::Page { id, text } => self.accept_page(id, text),
+                fetch::Msg::Resolved { name, found } => self.accept_resolved(name, found),
             }
         }
         if self.fetcher.busy() {
@@ -1575,7 +1662,7 @@ impl eframe::App for Viewer {
 
 #[cfg(test)]
 mod tests {
-    use super::{net, normalize_path, parse_address, resolve_path, routes, stash_fields};
+    use super::{net, normalize_path, parse_address, resolve_path, routes, stash_fields, Address};
     use std::collections::HashMap;
 
     #[test]
@@ -1603,30 +1690,15 @@ mod tests {
     #[test]
     fn page_paths_need_no_host() {
         let r = sites();
-        assert_eq!(
-            parse_address("/7", &r, "home"),
-            Some(("home".to_string(), "/7".to_string()))
-        );
-        assert_eq!(
-            parse_address("7", &r, "home"),
-            Some(("home".to_string(), "/7".to_string()))
-        );
-        assert_eq!(
-            parse_address("/", &r, "home"),
-            Some(("home".to_string(), "/".to_string()))
-        );
+        assert_eq!(parse_address("/7", &r, "home"), known("home", "/7"));
+        assert_eq!(parse_address("7", &r, "home"), known("home", "/7"));
+        assert_eq!(parse_address("/", &r, "home"), known("home", "/"));
         assert_eq!(
             parse_address("  /about/  ", &r, "home"),
-            Some(("home".to_string(), "/about/".to_string()))
+            known("home", "/about/")
         );
-        assert_eq!(
-            parse_address("about", &r, "home"),
-            Some(("home".to_string(), "/about".to_string()))
-        );
-        assert_eq!(
-            parse_address("/a//b/.", &r, "home"),
-            Some(("home".to_string(), "/a/b".to_string()))
-        );
+        assert_eq!(parse_address("about", &r, "home"), known("home", "/about"));
+        assert_eq!(parse_address("/a//b/.", &r, "home"), known("home", "/a/b"));
     }
 
     fn entry(id: u16, path: &str) -> net::Entry {
@@ -1650,24 +1722,35 @@ mod tests {
         assert_eq!(normalize_path("//a/./b/").as_deref(), Some("/a/b/"));
     }
 
+    fn known(site: &str, path: &str) -> Option<Address> {
+        Some(Address::Known {
+            site: site.to_string(),
+            path: path.to_string(),
+        })
+    }
+
+    fn unknown(site: &str, path: &str) -> Option<Address> {
+        Some(Address::Unknown {
+            site: site.to_string(),
+            path: path.to_string(),
+        })
+    }
+
     #[test]
     fn domains_select_the_site_and_path() {
         let r = sites();
-        assert_eq!(
-            parse_address("nac.local/", &r, "home"),
-            Some(("home".to_string(), "/".to_string()))
-        );
+        assert_eq!(parse_address("nac.local/", &r, "home"), known("home", "/"));
         assert_eq!(
             parse_address("nac.local/about", &r, "home"),
-            Some(("home".to_string(), "/about".to_string()))
+            known("home", "/about")
         );
         assert_eq!(
             parse_address("home.nac.local/about", &r, "home"),
-            Some(("home".to_string(), "/about".to_string()))
+            known("home", "/about")
         );
         assert_eq!(
             parse_address("archive.nac.local/3", &r, "home"),
-            Some(("archive".to_string(), "/3".to_string()))
+            known("archive", "/3")
         );
     }
 
@@ -1676,16 +1759,48 @@ mod tests {
         let r = sites();
         assert_eq!(
             parse_address("archive/3", &r, "home"),
-            Some(("archive".to_string(), "/3".to_string()))
+            known("archive", "/3")
         );
         assert_eq!(
             parse_address("nac://archive/3", &r, "home"),
-            Some(("archive".to_string(), "/3".to_string()))
+            known("archive", "/3")
+        );
+        assert_eq!(parse_address("archive", &r, "home"), known("archive", "/"));
+    }
+
+    #[test]
+    fn a_name_the_table_lacks_is_resolved_not_rejected() {
+        let r = sites();
+        assert_eq!(
+            parse_address("shop.nac.local/hats", &r, "home"),
+            unknown("shop", "/hats")
         );
         assert_eq!(
-            parse_address("archive", &r, "home"),
-            Some(("archive".to_string(), "/".to_string()))
+            parse_address("SHOP.nac.local/", &r, "home"),
+            unknown("shop", "/")
         );
+        // Only single-label names under our own suffix are worth a lookup.
+        assert_eq!(parse_address("a.b.nac.local/", &r, "home"), None);
+        assert_eq!(parse_address("shop.test/", &r, "home"), None);
+    }
+
+    #[test]
+    fn a_learned_site_becomes_a_known_one() {
+        let mut r = sites();
+        assert_eq!(
+            parse_address("shop.nac.local/", &r, "home"),
+            unknown("shop", "/")
+        );
+        r.learn("shop", "10.0.0.5:7100", routes::TlsMode::On);
+        assert_eq!(
+            parse_address("shop.nac.local/hats", &r, "home"),
+            known("shop", "/hats")
+        );
+        assert_eq!(
+            r.get("shop").map(|s| s.endpoint.as_str()),
+            Some("10.0.0.5:7100")
+        );
+        assert_eq!(r.get("shop").map(|s| s.tls), Some(routes::TlsMode::On));
     }
 
     #[test]

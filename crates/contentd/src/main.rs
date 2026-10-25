@@ -50,6 +50,10 @@ struct Manifest {
 struct State {
     data: PathBuf,
     python: String,
+    /// The name this server answers to, handed out on `Hello`.
+    name: String,
+    /// `sites.json`: name -> where that site lives. Answered on `Resolve`.
+    registry: Option<PathBuf>,
     /// Extra environment handed to page scripts (e.g. NAC_ROOT for the ops console).
     env: Vec<(String, String)>,
     /// Optional JSONL access log; off unless `--log` is given.
@@ -131,6 +135,8 @@ fn main() {
     let mut tls_key: Option<PathBuf> = None;
     let mut session_ttl = Duration::from_secs(7 * 24 * 3600);
     let mut allow_root = false;
+    let mut name = String::new();
+    let mut registry: Option<PathBuf> = None;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
@@ -145,6 +151,8 @@ fn main() {
             "--tls-cert" => tls_cert = args.next().map(PathBuf::from),
             "--tls-key" => tls_key = args.next().map(PathBuf::from),
             "--allow-root" => allow_root = true,
+            "--name" => name = args.next().unwrap_or_default(),
+            "--registry" => registry = args.next().map(PathBuf::from),
             "--session-ttl-hours" => {
                 let hours = args.next().and_then(|v| v.parse::<u64>().ok()).unwrap_or(168);
                 session_ttl = Duration::from_secs(hours.saturating_mul(3600));
@@ -201,6 +209,12 @@ fn main() {
     let state = Arc::new(State {
         data,
         python,
+        name: if name.is_empty() {
+            "site".to_string()
+        } else {
+            name
+        },
+        registry,
         env,
         log,
         session_ttl,
@@ -273,6 +287,31 @@ fn load_tls(cert: &Path, key: &Path) -> Result<Arc<ServerConfig>, String> {
     Ok(Arc::new(config))
 }
 
+/// Answers "where does site X live?" from `sites.json`.
+///
+/// Deliberately per-server rather than global: any server may know about any
+/// other, so a network can grow by sites pointing at each other instead of by
+/// one authority holding the whole table.
+///
+/// ```json
+/// {"home": {"host": "1.2.3.4", "port": 7000, "tls": true, "title": "演示站"}}
+/// ```
+fn lookup_site(state: &State, wanted: &str) -> Option<(String, bool, String)> {
+    let path = state.registry.as_ref()?;
+    let text = fs::read_to_string(path).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&text).ok()?;
+    let entry = value.get(wanted)?;
+    let host = entry.get("host")?.as_str()?;
+    let port = entry.get("port")?.as_u64()?;
+    let tls = entry.get("tls").and_then(|v| v.as_bool()).unwrap_or(false);
+    let title = entry
+        .get("title")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
+    Some((format!("{host}:{port}"), tls, title))
+}
+
 fn handle<S: Read + Write>(mut stream: S, state: Arc<State>) -> std::io::Result<()> {
     let started = Instant::now();
     let Some(frame) = read_frame(&mut stream)? else {
@@ -285,7 +324,34 @@ fn handle<S: Read + Write>(mut stream: S, state: Arc<State>) -> std::io::Result<
 
     if matches!(msg.request, Request::Hello) {
         log_line(&state, None, "hello", started, 2, None);
-        return send(&mut stream, &[ServerMsg::Hello { version: VERSION }]);
+        return send(
+            &mut stream,
+            &[ServerMsg::Hello {
+                version: VERSION,
+                site: state.name.clone(),
+            }],
+        );
+    }
+
+    if let Request::Resolve(wanted) = &msg.request {
+        return match lookup_site(&state, wanted) {
+            Some((endpoint, tls, title)) => {
+                log_line(&state, None, "resolve", started, 2, None);
+                send(
+                    &mut stream,
+                    &[ServerMsg::Resolved {
+                        name: wanted.clone(),
+                        endpoint,
+                        tls,
+                        title,
+                    }],
+                )
+            }
+            None => {
+                log_line(&state, None, "resolve-miss", started, 0, None);
+                send(&mut stream, &[ServerMsg::Empty])
+            }
+        };
     }
 
     let (manifest_gen, manifest) = match state.manifest() {
@@ -301,7 +367,16 @@ fn handle<S: Read + Write>(mut stream: S, state: Arc<State>) -> std::io::Result<
     let sess = hex8(&session.id);
 
     let (responses, page, result) = match &msg.request {
-        Request::Hello => (vec![ServerMsg::Hello { version: VERSION }], None, "hello".to_string()),
+        Request::Hello => (
+            vec![ServerMsg::Hello {
+                version: VERSION,
+                site: state.name.clone(),
+            }],
+            None,
+            "hello".to_string(),
+        ),
+        // Answered before this point; kept exhaustive.
+        Request::Resolve(_) => (vec![ServerMsg::Empty], None, "resolve".to_string()),
         Request::Manifest => {
             let mut entries: Vec<ManifestEntry> = manifest
                 .pages
