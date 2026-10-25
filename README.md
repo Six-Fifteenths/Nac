@@ -72,6 +72,8 @@ cp nac.routes.example nac.routes                        # 填上服务器地址
 | | |
 |---|---|
 | 页面 | 一个 `.py` 就是一页；`import nac` 提供排版与数据接口，其余标准库随便用 |
+| 渲染 | Markdown 超集：标题/粗斜体/列表/引用/代码块/表格/分隔线，其余用 `[[...]]` 指令 |
+| 命名空间 | `nac.text` `nac.links` `nac.skin` `nac.forms` `nac.req` `nac.state` `nac.data` `nac.tty` `nac.site` `nac.flow` |
 | 一页一族 | 页面可以认领 `/item/` 这样的前缀，自己从地址里取参数 |
 | 素材 | `_lib/`、`_data/` 里的文件原样带过去，页面照常 `import` / `open` |
 | 寻址 | 按路径（`/notes/`），不按页号；页号只是协议内部的东西 |
