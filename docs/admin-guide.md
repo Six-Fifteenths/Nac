@@ -18,39 +18,43 @@
 `ssh -N -L 端口:主机:端口`。分发版不编译这段代码，所以普通用户拿到 exe 没有任何
 可以启动子进程的能力。
 
-## 2. 站点表与显示后缀
+## 2. 站点表与名字
 
-`nac.routes`（不进仓库）说明客户端一开始认识哪些站：
+`nac.routes` 说明客户端一开始认识哪些站：
 
 ```
-# 一行改掉地址栏后缀（默认 nac.local）
-@domain shop.example
-
-*home   MTk5LjcuMTQwLjIxNzo3MDAw   tls
-console MTI3LjAuMC4xOjcwMDE=       plain ssh=root@example.test
+*nac.local  MTk5LjcuMTQwLjIxNzo3MDAw   tls
+console     MTI3LjAuMC4xOjcwMDE=       plain ssh=root@example.test
 ```
 
+- 第一列就是**地址栏里那一整串**：`nac.local`、`iris.out`、`EX_MYTH` 都行。
+  没有共用后缀，也不分层级；客户端拿它原样查表，查不到就去问服务器
 - 端点用 `viewer --routes-encode 主机:端口` 生成（base64，只是不显眼）
 - 第三列标记可并列：`tls` 强制加密、`plain` 强制明文、`ssh=` 只有 admin 构建认
 - 带 `*` 的是默认站
 - 检查：`viewer --routes-check`
-- 也可以在运行时用 `NAC_DOMAIN` 覆盖后缀
+
+名字的合法字符是字母、数字、点、连字符、下划线。所以 `EX_MYTH` 这种在真域名系统里
+非法的写法在这里完全正常 —— 它只是一串用来查表的字符。
 
 **这只是遮掩，不是加密。** 客户端要直连就必须知道端点。
 
 ## 3. 站点注册表：加站不用重发客户端
 
 每个 contentd 用 `--registry /srv/nac/sites.json` 说明自己认识哪些站，同时用
-`--name` 说明自己叫什么：
+`--name` 说明自己叫什么。**键名就是那个站的名字**，和地址栏里写的一模一样：
 
 ```json
 {
-  "home": {"host": "199.7.140.217", "port": 7000, "tls": true, "title": "主站"},
-  "shop": {"host": "199.7.140.217", "port": 7002, "tls": true, "title": "小器物"}
+  "nac.local":      {"host": "199.7.140.217", "port": 7000, "tls": true, "title": "主站"},
+  "shop.nac.local": {"host": "199.7.140.217", "port": 7002, "tls": true, "title": "小器物"},
+  "iris.out":       {"host": "199.7.140.217", "port": 7003, "tls": true, "title": "iris.out"},
+  "EX_MYTH":        {"host": "199.7.140.217", "port": 7004, "tls": true, "title": "EX_MYTH"}
 }
 ```
 
-客户端遇到不认识的 `名字.后缀` 就向**当前所在的服务器**问，服务器从这份文件回答。
+客户端遇到不认识的名字就向**当前所在的服务器**问，服务器从这份文件回答，并回
+**表里的写法** —— 所以敲 `ex_myth` 也能进，地址栏最后显示 `EX_MYTH`。
 于是**新加一个站不需要重新编译、重新分发客户端**。
 
 两种用法，同一份代码：
@@ -78,8 +82,9 @@ console MTI3LjAuMC4xOjcwMDE=       plain ssh=root@example.test
 /etc/ssl/nac/public.pin     证书的 SHA-256（客户端认的就是它）
 ```
 
-生成时用 `NAC_DOMAIN` 决定 CN / SAN（默认 `nac.local`）。
-名字对验证没有影响——客户端是按**指纹**校验的，不是按名字。
+生成时用 `NAC_DOMAIN` 决定 CN / SAN（默认 `nac.local`）。一张证书服务所有站，
+因为客户端是按**指纹**校验的，不是按名字，也不是按 SAN。这意味着加站不用重签、
+不用重发客户端；换证书才要。
 
 ### 把 pin 编进客户端
 
@@ -105,8 +110,7 @@ cargo build --release -p viewer
 只发一个 exe，不附带任何文件：把站点表也编进去。
 
 ```bash
-export NAC_EMBED_ROUTES='@domain shop.example
-*home MTk5LjcuMTQwLjIxNzo3MDAw tls'
+export NAC_EMBED_ROUTES='*nac.local MTk5LjcuMTQwLjIxNzo3MDAw tls'
 export NAC_TLS_PIN="$(tr -d '\n' < /etc/ssl/nac/public.pin)"
 cargo build --release -p viewer
 ```

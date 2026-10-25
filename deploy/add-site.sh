@@ -172,6 +172,6 @@ sleep 1
     echo "（自检失败：看 journalctl -u $UNIT）"
 
 echo
-echo "完成。客户端地址栏：$NAME.<后缀>/"
+echo "完成。客户端地址栏直接写：$NAME/"
 echo "注册表：$BASE/sites.json"
 echo "日志：journalctl -u $UNIT -f"
