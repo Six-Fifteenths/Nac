@@ -33,11 +33,19 @@
 
 ## 2. 端口与身份
 
+Nac **不占 80 / 443**：它走自己的二进制 TCP 协议，不经过 HTTP，也就没有"顺手挂到
+nginx 后面"这回事。宿主上的 80/443 留给别的服务，两边互不相干。
+
 | 服务 | 端口 | 绑定 | 用户 | 是什么 |
 |---|---|---|---|---|
-| `nac-contentd` | 7000 | `0.0.0.0` 或 `127.0.0.1` | `nac-public` | 主站（`--name nac.local`） |
+| `nac-contentd` | 7000 | `0.0.0.0` 或 `127.0.0.1` | `nac-public` | 主站 `nac.local` |
 | `nac-console` | 7001 | 只 `127.0.0.1` | `nac-console` | 运营台 |
-| `nac-contentd-<名字>` | 7002 起（现用 7003/7005/7006/7007） | 抄主站的 `--bind` | `nac-public` | 其它站，一站一个进程 |
+| `nac-contentd-iris.out` | 7003 | 抄主站的 `--bind` | `nac-public` | `iris.out` |
+| `nac-contentd-web.shell` | 7005 | 同上 | `nac-public` | `web.shell` |
+| `nac-contentd-conduit.sh` | 7006 | 同上 | `nac-public` | `conduit.sh` |
+| `nac-contentd-cain.society` | 7007 | 同上 | `nac-public` | `cain.society` |
+
+7002 / 7004 空着（删站后留下的号，不复用）。新站从 7002 往上找第一个空的。
 
 ## 3. 装
 
