@@ -1199,6 +1199,10 @@ impl Tab {
 
     /// Renders a run of inline content. When it contains links they become real
     /// widgets and the text flows around them; otherwise it is one laid-out job.
+    ///
+    /// `wrap` is off inside table cells: there the surrounding `Grid` decides
+    /// column widths from what each cell asks for, and a wrapping layout asks for
+    /// its minimum, which splits labels like "分栏实验" across two lines.
     fn render_flow(
         &mut self,
         ui: &mut egui::Ui,
@@ -1207,6 +1211,18 @@ impl Tab {
         color: Color32,
         family: FontFamily,
     ) {
+        self.render_flow_with(ui, parts, size, color, family, true);
+    }
+
+    fn render_flow_with(
+        &mut self,
+        ui: &mut egui::Ui,
+        parts: &[Inline],
+        size: f32,
+        color: Color32,
+        family: FontFamily,
+        wrap: bool,
+    ) {
         if !parts.iter().any(|p| matches!(p, Inline::Link { .. })) {
             ui.label(self.job(parts, size, color, family));
             return;
@@ -1214,7 +1230,7 @@ impl Tab {
 
         let mut run: Vec<Inline> = Vec::new();
         let mut clicked: Option<LinkTarget> = None;
-        ui.horizontal_wrapped(|ui| {
+        let body = |ui: &mut egui::Ui, run: &mut Vec<Inline>, clicked: &mut Option<LinkTarget>| {
             // The gap between a label and a link would otherwise be an extra
             // space in the middle of a sentence.
             ui.spacing_mut().item_spacing.x = 0.0;
@@ -1222,22 +1238,27 @@ impl Tab {
                 match part {
                     Inline::Link { target, text } => {
                         if !run.is_empty() {
-                            let job = self.job(&run, size, color, family.clone());
+                            let job = self.job(run, size, color, family.clone());
                             ui.label(job);
                             run.clear();
                         }
                         if ui.link(RichText::new(text).size(size)).clicked() {
-                            clicked = Some(target.clone());
+                            *clicked = Some(target.clone());
                         }
                     }
                     other => run.push(other.clone()),
                 }
             }
             if !run.is_empty() {
-                let job = self.job(&run, size, color, family.clone());
+                let job = self.job(run, size, color, family.clone());
                 ui.label(job);
             }
-        });
+        };
+        if wrap {
+            ui.horizontal_wrapped(|ui| body(ui, &mut run, &mut clicked));
+        } else {
+            ui.horizontal(|ui| body(ui, &mut run, &mut clicked));
+        }
 
         if let Some(target) = clicked {
             match target {
@@ -1272,12 +1293,13 @@ impl Tab {
                 for row in rows {
                     for index in 0..columns {
                         match row.get(index) {
-                            Some(cell) => self.render_flow(
+                            Some(cell) => self.render_flow_with(
                                 ui,
                                 cell,
                                 16.0,
                                 Color32::from_gray(28),
                                 FontFamily::Proportional,
+                                false,
                             ),
                             None => {
                                 ui.label("");
