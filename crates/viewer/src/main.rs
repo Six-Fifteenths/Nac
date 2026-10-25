@@ -548,10 +548,15 @@ enum Target {
 
 // ------------------------------------------------------------------ viewer
 
-struct Viewer {
+/// Everything one tab owns. A tab is the unit a browser calls a tab: its own
+/// site, connection, image cache, history and form contents. Two tabs can show
+/// two different sites at once without sharing anything.
+struct Tab {
+    /// Stable across tab reordering, so per-tab widget state (scroll offset,
+    /// texture names) survives closing another tab.
+    uid: u64,
     fetcher: fetch::Fetcher,
     loading: bool,
-    routes: routes::Routes,
     site: String,
     #[cfg(feature = "admin")]
     tunnel: Option<tunnel::Tunnel>,
@@ -568,12 +573,7 @@ struct Viewer {
     error: String,
     scroll_top: bool,
     loader: loader::Loader,
-    last_title: String,
     focus_input: bool,
-    addr_input: String,
-    addr_focus: bool,
-    addr_typing: bool,
-    pending_sync: bool,
     saved_fields: HashMap<u16, HashMap<String, String>>,
     shown_path: Option<String>,
     target: Option<Target>,
@@ -582,6 +582,38 @@ struct Viewer {
     /// The name currently being looked up, for the status line.
     resolving: Option<String>,
 }
+
+/// The window: a list of tabs plus the address-bar state, which belongs to the
+/// window rather than to any one tab.
+struct Viewer {
+    tabs: Vec<Tab>,
+    active: usize,
+    routes: routes::Routes,
+    addr_input: String,
+    addr_focus: bool,
+    addr_typing: bool,
+    pending_sync: bool,
+    last_title: String,
+}
+
+/// Which tab should be active after `index` is removed.
+///
+/// Separate from the viewer so the arithmetic is testable: closing a tab to the
+/// left of the active one must not silently select somebody else.
+fn active_after_close(len: usize, active: usize, index: usize) -> usize {
+    if len <= 1 {
+        return active;
+    }
+    let remaining = len - 1;
+    if index < active {
+        active - 1
+    } else {
+        active.min(remaining - 1)
+    }
+}
+
+/// Source of `Tab::uid`. Only needs to be unique within one run.
+static NEXT_TAB_UID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 impl Viewer {
     fn new(
@@ -593,16 +625,72 @@ impl Viewer {
         install_fonts(&cc.egui_ctx);
         cc.egui_ctx.set_visuals(egui::Visuals::light());
 
+        let mut viewer = Self {
+            tabs: Vec::new(),
+            active: 0,
+            routes,
+            addr_input: String::new(),
+            addr_focus: false,
+            addr_typing: false,
+            pending_sync: false,
+            last_title: String::new(),
+        };
+        viewer.open_tab(site, start_page.map(Target::Page));
+        viewer.addr_input = viewer.tab().address_text(&viewer.routes);
+        viewer
+    }
+
+    fn tab(&self) -> &Tab {
+        &self.tabs[self.active.min(self.tabs.len() - 1)]
+    }
+
+    fn tab_mut(&mut self) -> &mut Tab {
+        let index = self.active.min(self.tabs.len() - 1);
+        &mut self.tabs[index]
+    }
+
+    fn open_tab(&mut self, site: String, target: Option<Target>) {
+        let uid = NEXT_TAB_UID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.tabs.push(Tab::new(uid, &self.routes, site, target));
+        self.active = self.tabs.len() - 1;
+        self.pending_sync = true;
+    }
+
+    /// Opens the default site in a new tab. Used by the `+` button and `Ctrl+T`.
+    fn new_tab(&mut self) {
+        let site = self
+            .routes
+            .default_site()
+            .map(|s| s.name.clone())
+            .unwrap_or_else(|| "dev".to_string());
+        self.open_tab(site, None);
+    }
+
+    /// Closes one tab. The last tab is never closed, so the window always has
+    /// somewhere to draw.
+    fn close_tab(&mut self, index: usize) {
+        if self.tabs.len() <= 1 || index >= self.tabs.len() {
+            return;
+        }
+        let next = active_after_close(self.tabs.len(), self.active, index);
+        self.tabs.remove(index);
+        self.active = next;
+        self.pending_sync = true;
+    }
+}
+
+impl Tab {
+    fn new(uid: u64, routes: &routes::Routes, site: String, target: Option<Target>) -> Self {
         let endpoint = routes
             .get(&site)
             .map(|s| s.endpoint.clone())
             .unwrap_or_default();
         let tls = routes.get(&site).map(|s| s.tls).unwrap_or_default();
 
-        let mut v = Self {
+        let mut tab = Self {
+            uid,
             fetcher: fetch::Fetcher::new(endpoint.clone(), tls),
             loading: false,
-            routes,
             site,
             #[cfg(feature = "admin")]
             tunnel: None,
@@ -619,39 +707,33 @@ impl Viewer {
             error: String::new(),
             scroll_top: true,
             loader: loader::Loader::new(endpoint, tls),
-            last_title: String::new(),
             focus_input: false,
-            addr_input: String::new(),
-            addr_focus: false,
-            addr_typing: false,
-            pending_sync: false,
             saved_fields: HashMap::new(),
             shown_path: None,
-            target: start_page.map(Target::Page),
+            target,
             pending_path: None,
             resolving: None,
         };
-        v.addr_input = v.address_text();
         #[cfg(feature = "admin")]
         {
-            // Bring up the forward for the starting site before the first fetch.
-            if let Some(spec) = v.routes.get(&v.site).cloned() {
+            // Bring up the forward for this site before the first fetch.
+            if let Some(spec) = routes.get(&tab.site).cloned() {
                 if spec.ssh.is_some() {
                     match tunnel::Tunnel::ensure(&spec) {
-                        Ok(t) => v.tunnel = t,
-                        Err(message) => v.fail(message),
+                        Ok(t) => tab.tunnel = t,
+                        Err(message) => tab.fail(message),
                     }
                 }
             }
         }
-        v.bootstrap();
-        v
+        tab.bootstrap(routes);
+        tab
     }
 
     /// What the user sees: a page on a site, never an endpoint.
-    fn host(&self) -> String {
-        let domain = self.routes.domain();
-        if self.routes.sites.len() > 1 {
+    fn host(&self, routes: &routes::Routes) -> String {
+        let domain = routes.domain();
+        if routes.sites.len() > 1 {
             format!("{}.{}", self.site, domain)
         } else {
             domain.to_string()
@@ -668,17 +750,17 @@ impl Viewer {
 
     /// What the user sees: a domain-like origin plus the page path, never an
     /// endpoint or an internal page number.
-    fn address_text(&self) -> String {
+    fn address_text(&self, routes: &routes::Routes) -> String {
         let path = self
             .shown_path
             .clone()
             .or_else(|| self.page_id.and_then(|id| self.path_of(id)))
             .unwrap_or_else(|| "/".to_string());
-        format!("{}{}", self.host(), path)
+        format!("{}{}", self.host(routes), path)
     }
 
-    fn bootstrap(&mut self) {
-        if self.routes.is_empty() {
+    fn bootstrap(&mut self, routes: &routes::Routes) {
+        if routes.is_empty() {
             self.fail("找不到站点目录 nac.routes");
             return;
         }
@@ -689,7 +771,12 @@ impl Viewer {
     /// Applies a manifest that arrived from the worker thread.
     /// A `Resolve` came back. Either we learned where the site is, or nobody on
     /// this connection knows that name.
-    fn accept_resolved(&mut self, name: String, found: Option<net::Found>) {
+    fn accept_resolved(
+        &mut self,
+        routes: &mut routes::Routes,
+        name: String,
+        found: Option<net::Found>,
+    ) {
         self.resolving = None;
         self.loading = false;
         let path = self.pending_path.take().unwrap_or_else(|| "/".to_string());
@@ -700,10 +787,10 @@ impl Viewer {
                 } else {
                     routes::TlsMode::Off
                 };
-                self.routes.learn(&name, &found.endpoint, tls);
+                routes.learn(&name, &found.endpoint, tls);
                 let from = self.place();
                 self.trail.record(from);
-                self.connect(name, Some(Target::Path(path)));
+                self.connect(routes, name, Some(Target::Path(path)));
                 // Until the first page arrives, the site's own name is the most
                 // useful thing the window can say.
                 if self.title.is_empty() {
@@ -713,7 +800,6 @@ impl Viewer {
             None => {
                 self.failed = true;
                 self.error = format!("找不到站点 {name}");
-                self.pending_sync = true;
             }
         }
     }
@@ -752,11 +838,11 @@ impl Viewer {
         }
     }
 
-    fn connect(&mut self, site: String, target: Option<Target>) {
+    fn connect(&mut self, routes: &routes::Routes, site: String, target: Option<Target>) {
         #[cfg(feature = "admin")]
         {
             self.tunnel = None;
-            if let Some(spec) = self.routes.get(&site).cloned() {
+            if let Some(spec) = routes.get(&site).cloned() {
                 if spec.ssh.is_some() {
                     match tunnel::Tunnel::ensure(&spec) {
                         Ok(t) => self.tunnel = t,
@@ -769,12 +855,11 @@ impl Viewer {
                 }
             }
         }
-        let endpoint = self
-            .routes
+        let endpoint = routes
             .get(&site)
             .map(|s| s.endpoint.clone())
             .unwrap_or_default();
-        let tls = self.routes.get(&site).map(|s| s.tls).unwrap_or_default();
+        let tls = routes.get(&site).map(|s| s.tls).unwrap_or_default();
         self.site = site;
         self.fetcher = fetch::Fetcher::new(endpoint.clone(), tls);
         self.loader = loader::Loader::new(endpoint, tls);
@@ -792,17 +877,15 @@ impl Viewer {
         self.failed = false;
         self.scroll_top = true;
         self.target = target;
-        self.bootstrap();
+        self.bootstrap(routes);
     }
 
-    fn go(&mut self, input: &str) {
-        let Some(address) = parse_address(input, &self.routes, &self.site) else {
+    fn go(&mut self, routes: &mut routes::Routes, input: &str) {
+        let Some(address) = parse_address(input, routes, &self.site) else {
             self.failed = true;
             self.error = "地址无效".to_string();
-            self.pending_sync = true;
             return;
         };
-        self.pending_sync = true;
         self.failed = false;
         self.error.clear();
         match address {
@@ -810,7 +893,7 @@ impl Viewer {
                 if site != self.site {
                     let from = self.place();
                     self.trail.record(from);
-                    self.connect(site, Some(Target::Path(path)));
+                    self.connect(routes, site, Some(Target::Path(path)));
                 } else {
                     self.open_path(&path);
                 }
@@ -830,7 +913,7 @@ impl Viewer {
         }
     }
 
-    fn reload(&mut self) {
+    fn reload(&mut self, routes: &routes::Routes) {
         self.error.clear();
         self.failed = false;
         let path = self
@@ -845,7 +928,7 @@ impl Viewer {
                 self.loading = true;
                 self.fetcher.manifest();
             }
-            None => self.bootstrap(),
+            None => self.bootstrap(routes),
         }
     }
 
@@ -963,11 +1046,11 @@ impl Viewer {
 
     /// Goes to a remembered location, following the site boundary if needed.
     /// History is preserved: this is what makes the back button work across sites.
-    fn go_place(&mut self, place: Place) {
+    fn go_place(&mut self, routes: &routes::Routes, place: Place) {
         if place.site == self.site {
             self.open_path(&place.path);
         } else {
-            self.connect(place.site, Some(Target::Path(place.path)));
+            self.connect(routes, place.site, Some(Target::Path(place.path)));
         }
     }
 
@@ -981,17 +1064,17 @@ impl Viewer {
         self.load(target);
     }
 
-    fn back(&mut self) {
+    fn back(&mut self, routes: &routes::Routes) {
         let current = self.place();
         if let Some(prev) = self.trail.go_back(current) {
-            self.go_place(prev);
+            self.go_place(routes, prev);
         }
     }
 
-    fn forward(&mut self) {
+    fn forward(&mut self, routes: &routes::Routes) {
         let current = self.place();
         if let Some(next) = self.trail.go_forward(current) {
-            self.go_place(next);
+            self.go_place(routes, next);
         }
     }
 
@@ -1536,105 +1619,200 @@ impl Viewer {
     }
 }
 
+impl Viewer {
+    /// Runs `f` against the active tab while handing it the site table. The two
+    /// live in separate fields, so the borrow checker can see they do not alias.
+    fn with_tab<F: FnOnce(&mut Tab, &routes::Routes)>(&mut self, f: F) {
+        let index = self.active.min(self.tabs.len() - 1);
+        let routes = &self.routes;
+        f(&mut self.tabs[index], routes);
+    }
+
+    fn with_tab_routes<F: FnOnce(&mut Tab, &mut routes::Routes)>(&mut self, f: F) {
+        let index = self.active.min(self.tabs.len() - 1);
+        let routes = &mut self.routes;
+        f(&mut self.tabs[index], routes);
+    }
+}
+
 impl eframe::App for Viewer {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
 
-        for msg in self.fetcher.drain() {
-            match msg {
-                fetch::Msg::Manifest(entries) => self.accept_manifest(entries),
-                fetch::Msg::Page { id, text } => self.accept_page(id, text),
-                fetch::Msg::Resolved { name, found } => self.accept_resolved(name, found),
+        // Every tab keeps working while it is in the background: a page still
+        // loading in one tab does not stall because another tab is on screen.
+        for index in 0..self.tabs.len() {
+            for msg in self.tabs[index].fetcher.drain() {
+                match msg {
+                    fetch::Msg::Manifest(entries) => self.tabs[index].accept_manifest(entries),
+                    fetch::Msg::Page { id, text } => self.tabs[index].accept_page(id, text),
+                    fetch::Msg::Resolved { name, found } => {
+                        self.tabs[index].accept_resolved(&mut self.routes, name, found)
+                    }
+                }
             }
-        }
-        if self.fetcher.busy() {
-            ctx.request_repaint_after(std::time::Duration::from_millis(16));
+            for msg in self.tabs[index].loader.drain() {
+                if let loader::Msg::Done(loaded) = msg {
+                    let color = egui::ColorImage::from_rgba_unmultiplied(
+                        [loaded.width as usize, loaded.height as usize],
+                        &loaded.rgba,
+                    );
+                    // Texture names are per tab: two tabs may show the same page
+                    // number with different images. `uid` rather than the index,
+                    // because indices shift when a tab is closed.
+                    let tex = ctx.load_texture(
+                        format!("img-{}-{}", self.tabs[index].uid, loaded.id),
+                        color,
+                        egui::TextureOptions::LINEAR,
+                    );
+                    self.tabs[index].textures.insert(loaded.id, tex);
+                }
+            }
+            if self.tabs[index].fetcher.busy() {
+                ctx.request_repaint_after(std::time::Duration::from_millis(16));
+            }
+            if self.tabs[index].loader.busy() {
+                ctx.request_repaint_after(std::time::Duration::from_millis(50));
+            }
         }
 
-        for msg in self.loader.drain() {
-            if let loader::Msg::Done(loaded) = msg {
-                let color = egui::ColorImage::from_rgba_unmultiplied(
-                    [loaded.width as usize, loaded.height as usize],
-                    &loaded.rgba,
-                );
-                let tex = ctx.load_texture(
-                    format!("img-{}", loaded.id),
-                    color,
-                    egui::TextureOptions::LINEAR,
-                );
-                self.textures.insert(loaded.id, tex);
-            }
-        }
-        if self.loader.busy() {
-            ctx.request_repaint_after(std::time::Duration::from_millis(50));
-        }
-        if self.title != self.last_title {
-            self.last_title = self.title.clone();
-            let title = if self.title.is_empty() {
+        let title = self.tab().title.clone();
+        if title != self.last_title {
+            self.last_title = title.clone();
+            let text = if title.is_empty() {
                 "nac".to_string()
             } else {
-                format!("{} — nac", self.title)
+                format!("{title} — nac")
             };
-            ctx.send_viewport_cmd(egui::ViewportCommand::Title(title));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Title(text));
         }
 
         if ctx.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::L)) {
             self.addr_focus = true;
         }
+        if ctx.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::T)) {
+            self.new_tab();
+        }
+        if ctx.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::W)) {
+            let index = self.active;
+            self.close_tab(index);
+        }
+        if ctx.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::Tab)) {
+            self.active = (self.active + 1) % self.tabs.len();
+            self.pending_sync = true;
+        }
+
         let typing = ctx.egui_wants_keyboard_input();
         if ctx.input(|i| i.key_pressed(egui::Key::F5))
             || (!typing && ctx.input(|i| i.key_pressed(egui::Key::R)))
         {
-            self.reload();
+            self.with_tab(|tab, routes| tab.reload(routes));
+            self.pending_sync = true;
         }
         if ctx.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::Enter)) {
-            self.submit();
+            self.tab_mut().submit();
         }
         if (ctx.input(|i| i.key_pressed(egui::Key::Escape)) && !self.addr_typing)
             || ctx.input(|i| i.modifiers.alt && i.key_pressed(egui::Key::ArrowLeft))
         {
-            self.back();
+            self.with_tab(|tab, routes| tab.back(routes));
+            self.pending_sync = true;
         }
         if ctx.input(|i| i.modifiers.alt && i.key_pressed(egui::Key::ArrowRight)) {
-            self.forward();
+            self.with_tab(|tab, routes| tab.forward(routes));
+            self.pending_sync = true;
         }
+
+        // ------------------------------------------------------------ tab bar
+        let mut switch_to: Option<usize> = None;
+        let mut close: Option<usize> = None;
+        let mut add_tab = false;
+        let can_close = self.tabs.len() > 1;
+        egui::Panel::top("tabs").show(ui, |ui| {
+            ui.add_space(3.0);
+            ui.horizontal(|ui| {
+                for (index, tab) in self.tabs.iter().enumerate() {
+                    let label = if tab.title.is_empty() {
+                        tab.address_text(&self.routes)
+                    } else {
+                        tab.title.clone()
+                    };
+                    if ui
+                        .selectable_label(index == self.active, label)
+                        .clicked()
+                    {
+                        switch_to = Some(index);
+                    }
+                    if can_close && ui.small_button("×").on_hover_text("关闭标签页  (Ctrl+W)").clicked() {
+                        close = Some(index);
+                    }
+                    ui.add_space(6.0);
+                }
+                if ui
+                    .small_button("+")
+                    .on_hover_text("新标签页  (Ctrl+T)")
+                    .clicked()
+                {
+                    add_tab = true;
+                }
+            });
+            ui.add_space(3.0);
+        });
+        if let Some(index) = switch_to {
+            if index != self.active {
+                self.active = index;
+                self.pending_sync = true;
+            }
+        }
+        if let Some(index) = close {
+            self.close_tab(index);
+        }
+        if add_tab {
+            self.new_tab();
+        }
+
+        // ------------------------------------------------------------ toolbar
+        let mut want_back = false;
+        let mut want_forward = false;
+        let mut want_reload = false;
+        let mut want_home = false;
+        let mut goto: Option<String> = None;
+        let back_ok = self.tab().trail.can_back();
+        let forward_ok = self.tab().trail.can_forward();
 
         egui::Panel::top("top").show(ui, |ui| {
             ui.add_space(4.0);
             ui.horizontal(|ui| {
                 if ui
-                    .add_enabled(
-                        self.trail.can_back(),
-                        egui::Button::new(RichText::new("←").size(18.0)),
-                    )
+                    .add_enabled(back_ok, egui::Button::new(RichText::new("←").size(18.0)))
                     .on_hover_text("返回  (Esc / Alt+←)")
                     .clicked()
                 {
-                    self.back();
+                    want_back = true;
                 }
                 if ui
                     .add_enabled(
-                        self.trail.can_forward(),
+                        forward_ok,
                         egui::Button::new(RichText::new("→").size(18.0)),
                     )
                     .on_hover_text("前进  (Alt+→)")
                     .clicked()
                 {
-                    self.forward();
+                    want_forward = true;
                 }
                 if ui
                     .add(egui::Button::new(RichText::new("⟳").size(16.0)))
                     .on_hover_text("重新载入当前页  (F5)")
                     .clicked()
                 {
-                    self.reload();
+                    want_reload = true;
                 }
                 if ui
                     .add(egui::Button::new(RichText::new("⌂").size(16.0)))
                     .on_hover_text("回到首页")
                     .clicked()
                 {
-                    self.home_page();
+                    want_home = true;
                 }
 
                 let width = (ui.available_width() - 76.0).max(120.0);
@@ -1650,89 +1828,128 @@ impl eframe::App for Viewer {
                     self.addr_focus = false;
                 }
                 if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                    let input = self.addr_input.clone();
-                    self.go(&input);
+                    goto = Some(self.addr_input.clone());
                 }
                 self.addr_typing = resp.has_focus();
             });
             ui.add_space(4.0);
         });
 
+        if want_back {
+            self.with_tab(|tab, routes| tab.back(routes));
+            self.pending_sync = true;
+        }
+        if want_forward {
+            self.with_tab(|tab, routes| tab.forward(routes));
+            self.pending_sync = true;
+        }
+        if want_reload {
+            self.with_tab(|tab, routes| tab.reload(routes));
+            self.pending_sync = true;
+        }
+        if want_home {
+            self.tab_mut().home_page();
+            self.pending_sync = true;
+        }
+        if let Some(input) = goto {
+            self.pending_sync = true;
+            self.with_tab_routes(|tab, routes| tab.go(routes, &input));
+        }
+
+        // --------------------------------------------------------- status bar
+        let address = self.tab().address_text(&self.routes);
+        let status = {
+            let tab = self.tab();
+            if !tab.error.is_empty() {
+                tab.error.clone()
+            } else if tab.loading {
+                format!("{address} · 正在加载…")
+            } else if tab.failed {
+                format!("{address} · 无法获取内容")
+            } else {
+                format!("{address} · 已连接")
+            }
+        };
+        let bad = {
+            let tab = self.tab();
+            tab.failed || !tab.error.is_empty()
+        };
+        let tab_count = self.tabs.len();
         egui::Panel::bottom("bottom").show(ui, |ui| {
             ui.add_space(2.0);
             ui.horizontal(|ui| {
                 let (rect, _) =
                     ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
-                let bad = self.failed || !self.error.is_empty();
                 let color = if bad {
                     Color32::from_rgb(190, 70, 70)
                 } else {
                     Color32::from_rgb(90, 160, 90)
                 };
                 ui.painter().circle_filled(rect.center(), 4.0, color);
-                let status = if !self.error.is_empty() {
-                    self.error.clone()
-                } else if self.loading {
-                    format!("{} · 正在加载…", self.address_text())
-                } else if self.failed {
-                    format!("{} · 无法获取内容", self.address_text())
-                } else {
-                    format!("{} · 已连接", self.address_text())
-                };
                 ui.label(RichText::new(status).weak().size(12.0));
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.label(
-                        RichText::new("Ctrl+L 地址 · Esc 返回 · F5 刷新")
-                            .weak()
-                            .size(12.0),
+                        RichText::new(format!(
+                            "{tab_count} 个标签页 · Ctrl+T 新标签 · Ctrl+L 地址 · F5 刷新"
+                        ))
+                        .weak()
+                        .size(12.0),
                     );
                 });
             });
             ui.add_space(2.0);
         });
 
-        let reset_scroll = self.scroll_top;
+        // ------------------------------------------------------------- content
+        let reset_scroll = self.tab().scroll_top;
+        let failed = self.tab().failed;
+        let error = self.tab().error.clone();
+        let uid = self.tab().uid;
         egui::CentralPanel::default().show(ui, |ui| {
-            let mut area = egui::ScrollArea::vertical().auto_shrink([false, false]);
+            // Salted by tab: without it every tab would share one scroll offset,
+            // so switching tabs would land you mid-page somewhere else.
+            let mut area = egui::ScrollArea::vertical()
+                .id_salt(("page", uid))
+                .auto_shrink([false, false]);
             if reset_scroll {
                 area = area.vertical_scroll_offset(0.0);
             }
             area.show(ui, |ui| {
-                    if self.failed {
-                        ui.add_space(140.0);
-                        ui.vertical_centered(|ui| {
-                            let message = if self.error.is_empty() {
-                                "无法获取内容".to_string()
-                            } else {
-                                self.error.clone()
-                            };
-                            ui.label(
-                                RichText::new(message)
-                                    .size(20.0)
-                                    .color(Color32::from_gray(120)),
-                            );
-                            ui.add_space(10.0);
-                            ui.label(RichText::new("按 F5 重试，或在地址栏里换个地址").weak());
-                        });
-                        return;
-                    }
+                if failed {
+                    ui.add_space(140.0);
+                    ui.vertical_centered(|ui| {
+                        let message = if error.is_empty() {
+                            "无法获取内容".to_string()
+                        } else {
+                            error.clone()
+                        };
+                        ui.label(
+                            RichText::new(message)
+                                .size(20.0)
+                                .color(Color32::from_gray(120)),
+                        );
+                        ui.add_space(10.0);
+                        ui.label(RichText::new("按 F5 重试，或在地址栏里换个地址").weak());
+                    });
+                    return;
+                }
 
-                    let width = ui.available_width();
-                    let pad = ((width - 860.0) * 0.5).max(20.0);
-                    ui.horizontal(|ui| {
-                        ui.add_space(pad);
-                        ui.vertical(|ui| {
-                            ui.set_max_width((width - pad * 2.0).max(320.0));
-                            ui.add_space(18.0);
-                            self.render_blocks(ui);
-                            ui.add_space(60.0);
-                        });
+                let width = ui.available_width();
+                let pad = ((width - 860.0) * 0.5).max(20.0);
+                ui.horizontal(|ui| {
+                    ui.add_space(pad);
+                    ui.vertical(|ui| {
+                        ui.set_max_width((width - pad * 2.0).max(320.0));
+                        ui.add_space(18.0);
+                        self.tab_mut().render_blocks(ui);
+                        ui.add_space(60.0);
                     });
                 });
+            });
         });
-        self.scroll_top = false;
+        self.tab_mut().scroll_top = false;
 
-        let want = self.address_text();
+        let want = self.tab().address_text(&self.routes);
         if self.addr_input != want && (!self.addr_typing || self.pending_sync) {
             self.addr_input = want;
             self.pending_sync = false;
@@ -1743,8 +1960,8 @@ impl eframe::App for Viewer {
 #[cfg(test)]
 mod tests {
     use super::{
-        net, normalize_path, parse_address, resolve_path, routes, stash_fields, Address, Place,
-        Trail,
+        active_after_close, net, normalize_path, parse_address, resolve_path, routes,
+        stash_fields, Address, Place, Trail,
     };
     use std::collections::HashMap;
 
@@ -1971,6 +2188,21 @@ mod tests {
         let r = routes::Routes::parse("@domain naclocal\n*home 127.0.0.1:7000\n");
         assert_eq!(r.domain(), routes::DEFAULT_DOMAIN);
         assert_eq!(r.sites.len(), 1, "站点行不能被 @ 行吃掉");
+    }
+
+    #[test]
+    fn closing_a_tab_keeps_the_same_one_active() {
+        // Three tabs, looking at the middle one, close the first: the tab that
+        // was in the middle is now index 0 and must stay selected.
+        assert_eq!(active_after_close(3, 1, 0), 0);
+        // Close the active one: fall to whatever took its place.
+        assert_eq!(active_after_close(3, 1, 1), 1);
+        // Close the last while standing on it: step back.
+        assert_eq!(active_after_close(3, 2, 2), 1);
+        // Close something to the right: no change.
+        assert_eq!(active_after_close(3, 0, 2), 0);
+        // Two tabs, close the other one.
+        assert_eq!(active_after_close(2, 1, 0), 0);
     }
 
     #[test]
