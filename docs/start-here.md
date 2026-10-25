@@ -100,10 +100,11 @@ cd C:\nac-lab
 **应该看到**：
 
 ```
-published 1792940559 (1 pages, 0 images)
+published 1792940559 (1 pages, 0 images, 0 files)
 ```
 
-那个数字是这一版的编号（"第几代"），每次发布都不一样，正常。
+那个数字是这一版的编号（"第几代"），每次发布都不一样，正常。后面三个数分别是
+页面、图片、附件（`_files/` 里那种）的个数。
 
 **没看到**，而是 `publish failed: ...`：看 [第 12 步](#12-没反应的时候) 的排查表。
 
@@ -263,7 +264,7 @@ nac.button("说你好")
 | 引用 | `nac.quote("…")` |
 | 表格 | `nac.table(("头1","头2"), [("a","b")])` |
 | 一段代码 | `nac.code("print(1)", "python")` |
-| 提示框 | `with nac.ok("标题"):` —— 还有 `nac.warn` / `nac.danger` / `nac.tip` / `nac.note` |
+| 提示框 | `with nac.note("info", "标题"):` —— 还有 `"ok"` `"warn"` `"danger"` |
 | 折叠块 | `with nac.details("标题"):` |
 | 分栏 | `with nac.cols(2):` … `nac.col()` … |
 | 图 | `nac.figure("img/x.png", "说明", 60)` |
@@ -308,25 +309,27 @@ sudo chmod -R u=rwX,g=rX,o=rX /srv/nac/site
 sudo runuser -s /bin/sh -u nac-public -c 'umask 0007; exec /srv/nac/bin/publish --site /srv/nac/site --data /srv/nac/data --archive /srv/nac/archive'
 ```
 
-**应该看到**：`published 1xxxxxxxxx (27 pages, N images)`。
+**应该看到**：`published 1xxxxxxxxx (8 pages, N images, M files)`。
 
 **然后不用重启任何东西。** 在阅读器里按 `F5` 就是新的了。
 （`contentd` 每个请求都会看一眼 `data/current` 里写的是哪一代。）
 
 ### 11.3 别的站，只换路径
 
-| 站 | 目录 | 源码目录 |
-|---|---|---|
-| `nac.local` | `/srv/nac` | `site` |
-| `shop.nac.local` | `/srv/nac-shop` | `site-shop` |
-| `iris.out` | `/srv/nac-iris.out` | `site-iris` |
-| `EX_MYTH` | `/srv/nac-EX_MYTH` | `site-myth` |
+| 站 | 目录 | 源码目录 | 端口 |
+|---|---|---|---|
+| `nac.local` | `/srv/nac` | `site` | 7000 |
+| `iris.out` | `/srv/nac-iris.out` | `site-iris` | 7003 |
+| `web.shell` | `/srv/nac-web.shell` | `site-web.shell` | 7005 |
+| `conduit.sh` | `/srv/nac-conduit.sh` | `site-conduit` | 7006 |
+| `cain.society` | `/srv/nac-cain.society` | `site-cain.society` | 7007 |
 
 把上一条命令里的 `/srv/nac` 换成别的目录、`site` 换成对应的源码目录，就是更新那个站。
 
-> ⚠️ **不要**拿 `deploy/add-site.sh shop` 去"更新" shop。那个脚本看到注册表里的名字是
-> `shop.nac.local`、目录名是 `shop`，会以为这是个新站，给它换端口、加一条重复记录。
-> 加**新**站才用它。
+> ⚠️ `deploy/add-site.sh` 名字对得上时是幂等的，但它在服务器上跑、用的是服务器上那个
+> `publish`。服务器上没有 Rust，那个 `publish` 可能是旧版，生成的 `nac.py` 会缺新函数。
+> 站里用了新接口（比如 `nac.theme()`）时，照上面的方法在**本机**发布、把整代产物传上去。
+> 详见 [admin-guide.md](admin-guide.md) 第 8.1 节。
 
 ---
 
@@ -424,4 +427,5 @@ C:\nac-lab\                 ← 试验场，随便删
    └─ gen\1792940559\       ← 第 1792940559 代（每代都完整一份）
 ```
 
-真正的仓库是同样结构，只是多几个站：`site\`（主站）、`site-shop\`、`site-iris\`、`site-myth\`。
+真正的仓库是同样结构，只是多几个站：`site\`（主站）、`site-iris\`、`site-web.shell\`、
+`site-conduit\`、`site-cain.society\`。

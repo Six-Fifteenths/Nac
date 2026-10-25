@@ -37,14 +37,14 @@
 console     MTI3LjAuMC4xOjcwMDE=       plain ssh=root@example.test
 ```
 
-- 第一列就是**地址栏里那一整串**：`nac.local`、`iris.out`、`EX_MYTH` 都行。
+- 第一列就是**地址栏里那一整串**：`nac.local`、`iris.out`、`cain.society` 都行。
   没有共用后缀，也不分层级；客户端拿它原样查表，查不到就去问服务器
 - 端点用 `viewer --routes-encode 主机:端口` 生成（base64，只是不显眼）
 - 第三列标记可并列：`tls` 强制加密、`plain` 强制明文、`ssh=` 只有 admin 构建认
 - 带 `*` 的是默认站
 - 检查：`viewer --routes-check`
 
-名字的合法字符是字母、数字、点、连字符、下划线。所以 `EX_MYTH` 这种在真域名系统里
+名字的合法字符是字母、数字、点、连字符、下划线。所以 `my_site` 这种在真域名系统里
 非法的写法在这里完全正常 —— 它只是一串用来查表的字符。
 
 **这只是遮掩，不是加密。** 客户端要直连就必须知道端点。
@@ -57,14 +57,15 @@ console     MTI3LjAuMC4xOjcwMDE=       plain ssh=root@example.test
 ```json
 {
   "nac.local":      {"host": "199.7.140.217", "port": 7000, "tls": true, "title": "主站"},
-  "shop.nac.local": {"host": "199.7.140.217", "port": 7002, "tls": true, "title": "小器物"},
   "iris.out":       {"host": "199.7.140.217", "port": 7003, "tls": true, "title": "iris.out"},
-  "EX_MYTH":        {"host": "199.7.140.217", "port": 7004, "tls": true, "title": "EX_MYTH"}
+  "web.shell":      {"host": "199.7.140.217", "port": 7005, "tls": true, "title": "web.shell"},
+  "conduit.sh":     {"host": "199.7.140.217", "port": 7006, "tls": true, "title": "conduit.sh"},
+  "cain.society":   {"host": "199.7.140.217", "port": 7007, "tls": true, "title": "该隐学会"}
 }
 ```
 
 客户端遇到不认识的名字就向**当前所在的服务器**问，服务器从这份文件回答，并回
-**表里的写法** —— 所以敲 `ex_myth` 也能进，地址栏最后显示 `EX_MYTH`。
+**表里的写法** —— 所以敲 `CAIN.SOCIETY` 也能进，地址栏最后显示 `cain.society`。
 于是**新加一个站不需要重新编译、重新分发客户端**。
 
 两种用法，同一份代码：
@@ -235,8 +236,8 @@ cd /root/Nac
 ./deploy/add-site.sh iris.out --site site-iris --port 7003 --host 199.7.140.217
 ```
 
-名字就是你以后在地址栏里写的那个：`nac.local`、`shop.nac.local`、`iris.out`、
-`EX_MYTH` 都是合法写法。目录名会跟着变成 `/srv/nac-iris.out`。
+名字就是你以后在地址栏里写的那个：`nac.local`、`conduit.sh`、`iris.out`、
+`cain.society` 都是合法写法。目录名会跟着变成 `/srv/nac-iris.out`。
 
 它做四件事，每一步都可以手工复现：
 
@@ -249,6 +250,11 @@ cd /root/Nac
 
 绑定地址不传就抄主站 unit 里的 `--bind`，端口不传就从 7002 往上找空的。
 别忘了在防火墙上放行新端口。
+
+> ⚠️ 新站的 `data/` 里必须先放一个**空的 `access.jsonl`**：unit 的 `ReadWritePaths`
+> 指向它，文件不存在时 systemd 会以 `status=226/NAMESPACE` 拒绝启动 ——
+> 报错只说 "No such file or directory"，看不出是它。
+> `touch /srv/nac-<名字>/data/access.jsonl && chown nac-public:nac-share` 即可。
 
 验收：
 

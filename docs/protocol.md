@@ -76,7 +76,7 @@ u16 页号 | u8 标志 | u64 哈希 | u16 标题长 标题 | u16 路径长 路�
 客户端只内置一小份种子表（`nac.routes` 或编译期嵌入）。
 遇到表里没有的名字时，它向**当前所在的服务器**发一次 `op 5`。
 
-**名字就是一整串字符**：`nac.local`、`iris.out`、`EX_MYTH` 地位相同，没有后缀、
+**名字就是一整串字符**：`nac.local`、`iris.out`、`cain.society` 地位相同，没有后缀、
 没有层级。客户端只做「查表 / 问人」两件事，不解析、不推导。
 
 服务器从自己的 `sites.json` 回答：
@@ -114,7 +114,7 @@ u16 页号 | u8 标志 | u64 哈希 | u16 标题长 标题 | u16 路径长 路�
 字母、数字、点、连字符、下划线，最长 64；不能有空白，也不能有 `:`（那是端点，
 不是地址，客户端会直接拒绝而不是当成路径）。
 
-所以 `EX_MYTH` 这种在真域名系统里非法的写法在这里完全正常 —— 名字只是用来查表的
+所以 `my_site` 这种在真域名系统里非法的写法在这里完全正常 —— 名字只是用来查表的
 一串字符，没有任何一部分参与真实解析。
 
 单看客户端有没有把某个词当名字：**带点或下划线才算**。所以 `about` 是路径，
@@ -173,7 +173,7 @@ u16 页号 | u8 标志 | u64 哈希 | u16 标题长 标题 | u16 路径长 路�
 | `/`、空 | 当前站首页 |
 | `/about`、`about` | 当前站的路径 |
 | `nac.local/路径` | 切到该站（表里有就直接用） |
-| `iris.out/路径`、`EX_MYTH/` | 同上；表里没有就问当前服务器 |
+| `iris.out/路径`、`cain.society/` | 同上；表里没有就问当前服务器 |
 | `nac://名字/路径` | 同上（旧写法，仍支持） |
 | `名字/7` | 旧写法，按内部页号解析 |
 
@@ -193,7 +193,7 @@ u16 页号 | u8 标志 | u64 哈希 | u16 标题长 标题 | u16 路径长 路�
 ./target/release/contentd --data data --port 7000 --bind 127.0.0.1 &
 ./target/release/probe --addr 127.0.0.1:7000 hello        # version 5  site nac.local
 ./target/release/probe --addr 127.0.0.1:7000 health       # ok 27
-./target/release/probe --addr 127.0.0.1:7000 resolve shop # shop -> 127.0.0.1:7002 ...
+./target/release/probe --addr 127.0.0.1:7000 resolve iris.out # -> 199.7.140.217:7003 ...
 ./target/release/probe --addr 127.0.0.1:7000 manifest     # 每页一行：页号 类型 哈希 路径 标题
 ./target/release/probe --addr 127.0.0.1:7000 page <页号> --path /
 ```

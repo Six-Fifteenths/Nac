@@ -31,6 +31,9 @@ nac.done()
 
 ## 0. 五分钟写第一页
 
+只想先"看到东西"的话，跟着这三步走；卡住了再看 [start-here.md](start-here.md)
+那份带排查步骤的。
+
 ```bash
 # 1. 在站点目录里放一个文件
 cat > site/hello.py <<'PY'
@@ -44,7 +47,7 @@ nac.p("这一页是 ", nac.tt("site/hello.py"), "，一个普通的 Python 程�
 nac.p("现在是 ", nac.b(__import__("time").strftime("%H:%M:%S")), "。")
 PY
 
-# 2. 发布（会打印 "published <代数> (N pages, M images)"）
+# 2. 发布（会打印 "published <代数> (N pages, M images, K files)"）
 ./target/release/publish --site site --data data
 
 # 3. 打开（或用已经开着的客户端按 F5）
@@ -158,13 +161,13 @@ nac.p("读者看到的是这一行")                     # 进页面
 | 命名空间 | 管什么 | 下面几节 |
 |---|---|---|
 | `nac.text` | 文字与块：段落、标题、粗斜体、列表、表格、代码块 | B C |
-| `nac.links` | 链接与站内导航：`link_path` / `inline_path` / `nav` / `redirect` | F |
-| `nac.skin` | 面板与外观：提示框、页签、盒子、头像、图片 | D E |
+| `nac.links` | 链接与站内导航：`link_path` / `inline_path` / `nav` / `redirect_path` | F |
+| `nac.skin` | 皮肤：盒子、分栏、提示框、折叠、页签、整页主题 | D 11 |
+| `nac.media` | 媒体：图片、说明、附件、头像、终端面板 | E 10 |
 | `nac.forms` | 表单：字段、按钮、预填 | G |
 | `nac.req` | 这一次请求：地址参数、表单内容、是不是提交 | H |
 | `nac.state` | 会话与一次性提示 | I |
 | `nac.data` | 站点的数据：JSON、计数、SQLite | J |
-| `nac.tty` | 终端面板（`[[term]]`） | 10 |
 | `nac.site` | 本站自身：有几页、这一页叫什么 | A |
 | `nac.flow` | 收尾：`done()` / `stop()` / `flush()` | K |
 
@@ -191,7 +194,9 @@ AttributeError: nac.text 里没有 'nope'
 
 ---
 
-生成的 `nac.py` 分成 11 节，**只有 C/D/E/F/G 会往页面上写内容**。
+生成的 `nac.py` 分成十几节（A 环境、B 文本、C 块级、D 容器、E 媒体、F 导航、
+G 表单、H 请求、I 会话、J 数据、K 输出、L 样式、终端）。**只有 C/D/E/F/G、L 和终端
+那几节会往页面上写内容**，其余都是在读数或收尾。
 
 ### A. 环境
 
@@ -228,7 +233,6 @@ AttributeError: nac.text 里没有 'nope'
 | `nac.bullets(*items)` | 无序列表 |
 | `nac.ordered(*items)` | 有序列表，编号自动加 |
 | `nac.table(header, rows)` | 表格，第一行是表头 |
-| `nac.defs(pairs)` | 键值表（两列的 `table`） |
 | `nac.hr()` | 分隔线 |
 | `nac.code(text, lang=None)` | 等宽块；给了 `lang` 会标出语言 |
 | `nac.gap()` | 空行，分段与间距 |
@@ -256,7 +260,7 @@ nac.table(
 容器**可以互相嵌套**，深度不限：
 
 ```python
-with nac.warn("注意"):
+with nac.note("warn", "注意"):
     nac.p("提示框里可以放列表：")
     nac.bullets("甲", "乙")
     with nac.cols(2):
@@ -293,12 +297,8 @@ with nac.warn("注意"):
 | 调用 | 说明 |
 |---|---|
 | `nac.link_path(path, text)` | 跳到路径；目录要带尾斜杠（如 `/notes/`）。前缀页下的地址也认 |
-| `nac.link(page, text)` | 按内部页号跳转；页号不存在时整行不显示 |
 | `nac.nav(*paths)` | 一行面包屑，每个路径都是行内链接 |
-| `nac.home()` | 回首页那一行 |
 | `nac.redirect_path(path)` | 按路径立刻跳转；路径不存在时不动 |
-| `nac.redirect(page)` | 按内部页号跳转，本页已拼的内容丢弃 |
-| `nac.first_page()` | 本代最小内部页号 |
 | `nac.inline_path(path, text)` | 返回一个行内路径链接，塞进 `p()` 里用 |
 | `nac.inline_url(url, text)` | 返回一个站外链接，点开交给系统浏览器 |
 
@@ -323,7 +323,6 @@ nac.p("细节见 ", nac.inline_path("/notes/", "笔记目录"), " 那一页。")
 | `nac.field(name, label="", secret=False)` | 单行输入 |
 | `nac.password(name, label="")` | 密码输入 |
 | `nac.textarea(name, label="")` | 多行输入 |
-| `nac.select(name, label, options)` | 下拉选择，`options` 是字符串列表 |
 | `nac.check(name, label="")` | 复选框；勾上提交 `"1"`，否则空串 |
 | `nac.prefill(name, value)` | 给字段填上初始文字；只在读者还没动过它时生效 |
 | `nac.hidden(name, value)` | 看不见的字段，跟着表单一起提交（记住「刚才是哪一条」） |
@@ -379,7 +378,6 @@ for line in nac.flashes():
 | `nac.save_session(state)` | 写回状态 |
 | `nac.session_get(key, default=None)` | 读一个键 |
 | `nac.session_set(key, value)` | 写一个键 |
-| `nac.session_update(**values)` | 一次写多个键，只读写文件一次 |
 | `nac.session_pop(key, default=None)` | 取走并删除 |
 
 会话存在服务端，按客户端带来的会话号区分；关掉客户端再回来仍然在（默认保留 168 小时）。
@@ -462,7 +460,7 @@ rows = db.execute("select name, body, at from msg order by id desc limit 12").fe
 
 nac.h1("留言板")
 for line in nac.flashes():
-    with nac.ok("刚完成"):
+    with nac.note("ok", "刚完成"):
         nac.p(line)
 
 if rows:
@@ -478,7 +476,6 @@ nac.field("name", "你的名字（可留空）")
 nac.textarea("message", "留言，最多 200 字")
 nac.check("public", "我知道留言是公开的")
 nac.button("留下")
-nac.home()
 nac.done()
 ```
 
@@ -549,7 +546,8 @@ with nac.cols(2):
 
 - 不写 `nac.col()` 时按**块数**平均分配到 n 列
 - 写了 `nac.col()`，切点完全由你决定，`n` 被忽略（列数 = 切点 + 1）
-- 最多 4 列；列宽由客户端按可用宽度平分，两列高度不会自动对齐
+- 列数没有上限（几十列会挤成一条条，自己看着办）；列宽由客户端按可用宽度平分，
+  两列高度不会自动对齐
 - 可以嵌套，里面还能放表格、提示框、页签
 
 ## 6. 图片与附件

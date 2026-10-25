@@ -1,8 +1,8 @@
 #!/bin/sh
 # 给已经装好的 nac 增加一个站点。
 #
-#   sudo ./deploy/add-site.sh shop                      # 用 site-shop/ 作为页面源码
-#   sudo ./deploy/add-site.sh shop --site site-shop --port 7002 --host 1.2.3.4
+#   sudo ./deploy/add-site.sh iris.out                   # 用 site-iris.out/ 作为页面源码
+#   sudo ./deploy/add-site.sh iris.out --site site-iris --port 7003 --host 1.2.3.4
 #
 # 它做四件事：
 #   1. 建 /srv/nac-<名字>/{site,data,archive}，权限与公开站一致

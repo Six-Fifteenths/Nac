@@ -400,7 +400,7 @@ data/state/sessions/<32位十六进制>.json
 地址栏里写 `iris.out/entry/blue`，分两半：**名字** `iris.out`，**路径** `/entry/blue`。
 
 名字就是**一整串字符**。没有层级、没有"公共后缀"、不参与任何推导。
-`nac.local` 和 `EX_MYTH` 地位完全平等。合法字符只有字母、数字、点、连字符、下划线，
+`nac.local` 和 `cain.society` 地位完全平等。合法字符只有字母、数字、点、连字符、下划线，
 最长 64 字节；**含冒号或方括号直接被拒**（那是在输入 IP:端口，不是在输地址）。
 
 客户端手里有一份**种子表**，一行一个：
@@ -425,7 +425,7 @@ data/state/sessions/<32位十六进制>.json
 这个回答**任何服务器都能给**，不是只有中心能给 —— 每个站都读自己那份 `sites.json`。
 所以同一套代码既能做"一台机器上几个站"，也能做"网络里的一个节点"。
 
-查表不分大小写：敲 `ex_myth` 也能进，服务器会回注册表里的写法 `EX_MYTH`，
+查表不分大小写：敲 `CAIN.SOCIETY` 也能进，服务器会回注册表里的写法 `cain.society`，
 地址栏随之变成那个写法。
 
 ### 一个站 vs 多个站
@@ -434,11 +434,12 @@ data/state/sessions/<32位十六进制>.json
 它们之间没有共享内存、没有共享数据库，能看到的对方只是注册表里那几行地址。
 
 ```
-一台服务器上：
-  contentd --name nac.local      --port 7000 --data /srv/nac/data
-  contentd --name shop.nac.local --port 7002 --data /srv/nac-shop/data
-  contentd --name iris.out       --port 7003 --data /srv/nac-iris.out/data
-  contentd --name EX_MYTH        --port 7004 --data /srv/nac-EX_MYTH/data
+一台服务器上（现在实际跑着这五个）：
+  contentd --name nac.local     --port 7000 --data /srv/nac/data
+  contentd --name iris.out      --port 7003 --data /srv/nac-iris.out/data
+  contentd --name web.shell     --port 7005 --data /srv/nac-web.shell/data
+  contentd --name conduit.sh    --port 7006 --data /srv/nac-conduit.sh/data
+  contentd --name cain.society  --port 7007 --data /srv/nac-cain.society/data
 ```
 
 一个站挂了不影响别人；一个站的数据另一个站读不到。

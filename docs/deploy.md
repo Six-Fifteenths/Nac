@@ -19,10 +19,10 @@
 ├─ archive/                    原图归档（用 --archive 时才有）
 └─ sites.json                  站点注册表：客户端按名字找站时照它回答
 
-/srv/nac-shop.nac.local/       其它站各占一个同级目录，名字见注册表
-/srv/nac-iris.out/             ├─ site/     页面源码
-/srv/nac-EX_MYTH/              ├─ data/     自己的代、会话、数据库
-                               └─ archive/
+/srv/nac-iris.out/             另外四个站，各占一个同级目录
+/srv/nac-web.shell/            ├─ site/     页面源码
+/srv/nac-conduit.sh/           ├─ data/     自己的代、会话、数据库
+/srv/nac-cain.society/         └─ archive/
 ```
 
 **每站一个进程**：自己的端口、自己的 `data/`、自己的数据库、自己的沙箱。
@@ -37,7 +37,7 @@
 |---|---|---|---|---|
 | `nac-contentd` | 7000 | `0.0.0.0` 或 `127.0.0.1` | `nac-public` | 主站（`--name nac.local`） |
 | `nac-console` | 7001 | 只 `127.0.0.1` | `nac-console` | 运营台 |
-| `nac-contentd-<名字>` | 7002 起 | 抄主站的 `--bind` | `nac-public` | 其它站，一站一个进程 |
+| `nac-contentd-<名字>` | 7002 起（现用 7003/7005/7006/7007） | 抄主站的 `--bind` | `nac-public` | 其它站，一站一个进程 |
 
 ## 3. 装
 
@@ -107,7 +107,7 @@ cd /root/Nac
 | 登记 | `/srv/nac/sites.json` 里一条 |
 
 绑定地址不传就抄主站 unit 里的 `--bind`，端口不传就从 7002 往上找空的。
-名字允许字母、数字、点、连字符、下划线 —— `EX_MYTH` 这种也行。
+名字允许字母、数字、点、连字符、下划线 —— `my_site` 这种也行。
 
 **应该看到**：`自检` 那行打印 `version 5  site iris.out`。
 
@@ -116,9 +116,10 @@ cd /root/Nac
 ```json
 {
   "nac.local":      {"host": "199.7.140.217", "port": 7000, "tls": true, "title": "主站"},
-  "shop.nac.local": {"host": "199.7.140.217", "port": 7002, "tls": true, "title": "小器物"},
   "iris.out":       {"host": "199.7.140.217", "port": 7003, "tls": true, "title": "iris.out"},
-  "EX_MYTH":        {"host": "199.7.140.217", "port": 7004, "tls": true, "title": "EX_MYTH"}
+  "web.shell":      {"host": "199.7.140.217", "port": 7005, "tls": true, "title": "web.shell"},
+  "conduit.sh":     {"host": "199.7.140.217", "port": 7006, "tls": true, "title": "conduit.sh"},
+  "cain.society":   {"host": "199.7.140.217", "port": 7007, "tls": true, "title": "该隐学会"}
 }
 ```
 
