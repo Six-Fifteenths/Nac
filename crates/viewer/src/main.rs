@@ -21,7 +21,76 @@ mod tunnel;
 
 use markup::{Block, Inline, LinkTarget, NoteKind};
 
+/// A windowed build has no console, so a panic at startup used to look exactly
+/// like "double-clicking does nothing": the process vanished and said nothing.
+/// Write the reason next to the crash and put it on screen once.
+fn report_panics() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static SHOWN: AtomicBool = AtomicBool::new(false);
+
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let text = format!("{info}");
+        eprintln!("{text}");
+        if SHOWN.swap(true, Ordering::SeqCst) {
+            previous(info);
+            return;
+        }
+        let path = std::env::temp_dir().join("nac-viewer-crash.txt");
+        let _ = std::fs::write(&path, &text);
+        let message = format!(
+            "Nac 客户端遇到了内部错误，无法继续。\n\n{text}\n\n详细信息已写入：\n{}",
+            path.display()
+        );
+        alert(&message);
+        previous(info);
+    }));
+}
+
+/// A modal box, so the message is visible even with no console attached.
+#[cfg(target_os = "windows")]
+fn alert(text: &str) {
+    use std::os::windows::ffi::OsStrExt;
+    use std::ptr;
+
+    #[link(name = "user32")]
+    extern "system" {
+        fn MessageBoxW(
+            owner: *mut std::ffi::c_void,
+            text: *const u16,
+            caption: *const u16,
+            kind: u32,
+        ) -> i32;
+    }
+
+    let wide = |s: &str| -> Vec<u16> {
+        std::ffi::OsStr::new(s)
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect()
+    };
+    let body = wide(text);
+    let title = wide("Nac");
+    const MB_ICONERROR: u32 = 0x10;
+    // SAFETY: both strings are NUL-terminated and outlive the call.
+    unsafe {
+        MessageBoxW(
+            ptr::null_mut(),
+            body.as_ptr(),
+            title.as_ptr(),
+            MB_ICONERROR,
+        );
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn alert(text: &str) {
+    eprintln!("{text}");
+}
+
 fn main() -> eframe::Result<()> {
+    report_panics();
+
     let mut addr: Option<String> = std::env::var("NAC_ADDR").ok();
     let mut routes_path: Option<String> = None;
     let mut site_name: Option<String> = None;
