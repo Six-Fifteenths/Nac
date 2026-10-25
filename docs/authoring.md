@@ -3,6 +3,7 @@
 一个页面 = 一个 Python 程序 = `site/` 下的一个 `.py` 文件。
 
 > 第一次写页面？先看 [start-here.md](start-here.md)，那份是从零开始的一步步教程。
+> 想知道为什么这样、运行的时候发生了什么？看 [how-it-works.md](how-it-works.md)。
 > 这份是查手册用的。
 
 ```python

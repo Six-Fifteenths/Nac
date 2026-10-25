@@ -6,6 +6,7 @@
 不讲原理，原理在别的文档里（最后有一张表告诉你哪本讲什么）。
 
 如果你只想改动线上已有的站，直接跳到 [第 11 步](#11-传到服务器)。
+如果你想先搞懂"它到底在干什么"，看 [how-it-works.md](how-it-works.md)。
 
 ---
 
@@ -389,6 +390,7 @@ RuntimeError: 这是我故意抛的错
 
 | 想知道什么 | 看哪本 |
 |---|---|
+| 它到底是怎么运作的（原理，不用背景知识） | [how-it-works.md](how-it-works.md) |
 | 客户端每个按钮/快捷键 | [user-guide.md](user-guide.md) |
 | `nac` 每个函数的完整说明、标记语法、动画 | [authoring.md](authoring.md) |
 | 服务器上到底装了什么、怎么加站、怎么升级 | [deploy.md](deploy.md) |
