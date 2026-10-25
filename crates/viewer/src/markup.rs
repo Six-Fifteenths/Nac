@@ -316,11 +316,12 @@ fn parse_one(lines: &[&str], i: &mut usize) -> Option<Block> {
         return Some(Block::Quote(inlines(&parts.join(" "))));
     }
 
-    if t.starts_with("- ") {
-        let mut items = Vec::new();
+    if let Some(first) = bullet_item(t) {
+        let mut items = vec![inlines(first)];
+        *i += 1;
         while *i < lines.len() {
             let q = lines[*i].trim_start();
-            if let Some(rest) = q.strip_prefix("- ") {
+            if let Some(rest) = bullet_item(q) {
                 items.push(inlines(rest));
                 *i += 1;
             } else {
@@ -997,9 +998,28 @@ fn push_gap(out: &mut Vec<Block>) {
 }
 
 fn heading(line: &str) -> Option<(u8, &str)> {
-    for (prefix, level) in [("### ", 3u8), ("## ", 2), ("# ", 1)] {
+    // 一到六级都认（Markdown 的写法），样式只分三级：一级标题、二级标题、
+    // 其余一律按三级画 —— 文档里明说了这一点。
+    for (prefix, level) in [
+        ("###### ", 6u8),
+        ("##### ", 5),
+        ("#### ", 4),
+        ("### ", 3),
+        ("## ", 2),
+        ("# ", 1),
+    ] {
         if let Some(rest) = line.strip_prefix(prefix) {
             return Some((level, rest.trim()));
+        }
+    }
+    None
+}
+
+/// `- 内容` / `* 内容` / `+ 内容` — Markdown 允许三种圆点，都当成无序列表。
+fn bullet_item(line: &str) -> Option<&str> {
+    for marker in ["- ", "* ", "+ "] {
+        if let Some(rest) = line.strip_prefix(marker) {
+            return Some(rest);
         }
     }
     None
@@ -1042,6 +1062,26 @@ fn page_link(line: &str) -> Option<(LinkTarget, String)> {
     bracket_link(&rest[..end])
 }
 
+/// `[文字](/path)` / `[文字](https://…)` / `[文字](31345)` —— Markdown 的链接。
+///
+/// 目标是 `/` 开头就按站内路径，`http(s)://` 开头交给系统浏览器，纯数字当页号。
+/// 其它（`file:`、`javascript:`、自定义协议）一律不认，链接就退化成普通文字。
+fn markdown_link(target: &str) -> Option<LinkTarget> {
+    let raw = target.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    if let Some(rest) = raw.strip_prefix('/') {
+        let path = format!("/{rest}");
+        return Some(LinkTarget::Path(path));
+    }
+    let lower = raw.to_ascii_lowercase();
+    if lower.starts_with("https://") || lower.starts_with("http://") {
+        return Some(LinkTarget::Url(raw.to_string()));
+    }
+    raw.parse::<u16>().ok().map(LinkTarget::Page)
+}
+
 fn bracket_link(inner: &str) -> Option<(LinkTarget, String)> {
     let (raw, text) = inner.split_once('|')?;
     let raw = raw.trim();
@@ -1068,6 +1108,20 @@ fn bracket_link(inner: &str) -> Option<(LinkTarget, String)> {
     Some((target, text.trim().to_string()))
 }
 
+/// Reads `[文字](目标)` starting at `open` (which must be `[`).
+/// Returns the target, the text, and where to continue after the `)`.
+fn scan_markdown_link(cs: &[char], open: usize) -> Option<(LinkTarget, String, usize)> {
+    let close_text = (open + 1..cs.len()).find(|&j| cs[j] == ']')?;
+    if close_text + 1 >= cs.len() || cs[close_text + 1] != '(' {
+        return None;
+    }
+    let close_target = (close_text + 2..cs.len()).find(|&j| cs[j] == ')')?;
+    let text: String = cs[open + 1..close_text].iter().collect();
+    let target: String = cs[close_text + 2..close_target].iter().collect();
+    let target = markdown_link(&target)?;
+    Some((target, text, close_target + 1))
+}
+
 /// Finds `needle` (a two-character run such as `**`) starting at `from`,
 /// returning the index where it starts. Used so `**a**` closes on `**`, not on
 /// the first `*` of the closing pair.
@@ -1091,6 +1145,17 @@ pub fn inlines(s: &str) -> Vec<Inline> {
             buf.push(cs[i + 1]);
             i += 2;
             continue;
+        }
+        // `[文字](目标)` —— Markdown 的写法。
+        if c == '[' {
+            if let Some((target, text, next)) = scan_markdown_link(&cs, i) {
+                if !buf.is_empty() {
+                    out.push(Inline::Text(std::mem::take(&mut buf)));
+                }
+                out.push(Inline::Link { target, text });
+                i = next;
+                continue;
+            }
         }
         // `[[12|文字]]` inside a run of text is a link, not literal brackets.
         if c == '[' && i + 1 < cs.len() && cs[i + 1] == '[' {
@@ -1486,6 +1551,24 @@ mod tests {
     }
 
     #[test]
+    fn markdown_shorthand_is_understood() {
+        // 一到六级标题都认；样式只分三级，但解析不能漏。
+        let blocks = parse("#### 四级\n");
+        assert!(matches!(blocks[0], Block::Heading(4, _)));
+
+        // 三种圆点都当无序列表。
+        for src in ["- 甲\n- 乙\n", "* 甲\n* 乙\n", "+ 甲\n+ 乙\n"] {
+            match &parse(src)[0] {
+                Block::List(items) => assert_eq!(items.len(), 2, "{src}"),
+                other => panic!("期望列表，得到 {other:?}（{src}）"),
+            }
+        }
+
+        // `* 斜体 *` 在段首不会被当成圆点。
+        assert!(matches!(parse("*不是列表*\n")[0], Block::Para(_)));
+    }
+
+    #[test]
     fn a_fence_becomes_a_code_block_with_its_language() {
         let src = "```python\nprint(1)\nprint(2)\n```\n";
         match only(&parse(src)) {
@@ -1502,6 +1585,38 @@ mod tests {
             plain.iter().any(|b| matches!(b, Block::Para(_))),
             "代码块后面的文字要留下来：{plain:?}"
         );
+    }
+
+    #[test]
+    fn markdown_links_become_links() {
+        // 站内路径
+        assert_eq!(
+            inlines("[首页](/)"),
+            vec![Inline::Link {
+                target: LinkTarget::Path("/".into()),
+                text: "首页".into()
+            }]
+        );
+        // 站外
+        assert!(matches!(
+            &inlines("[外站](https://example.com)")[0],
+            Inline::Link { target: LinkTarget::Url(u), .. } if u == "https://example.com"
+        ));
+        // 页号
+        assert!(matches!(
+            &inlines("[某页](31345)")[0],
+            Inline::Link { target: LinkTarget::Page(31345), .. }
+        ));
+        // 不认的协议退化成文字，不会变成可点的链接
+        let hostile = inlines("[点我](javascript:alert(1))");
+        assert!(hostile.iter().all(|p| !matches!(p, Inline::Link { .. })));
+
+        // 句子中间的链接不影响前后文字
+        let mixed = inlines("看 [这里](/notes) 就行");
+        assert_eq!(mixed.len(), 3);
+        assert!(matches!(mixed[0], Inline::Text(_)));
+        assert!(matches!(mixed[1], Inline::Link { .. }));
+        assert!(matches!(mixed[2], Inline::Text(_)));
     }
 
     #[test]

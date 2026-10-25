@@ -135,6 +135,7 @@ cargo build --release -p viewer          # 产物：target\release\viewer.exe
 | [docs/start-here.md](docs/start-here.md) | **新手**：从零写出一页、看到它、传到服务器 |
 | [docs/how-it-works.md](docs/how-it-works.md) | **想理解原理的人**：按 F5 到字出现，中间发生了什么 |
 | [docs/user-guide.md](docs/user-guide.md) | 拿到客户端的人：地址栏怎么用、标签页、出问题怎么办 |
+| [docs/rendering.md](docs/rendering.md) | **想知道能画什么的人**：全部可选项、渲染效果、比 HTML 少了什么 |
 | [docs/authoring.md](docs/authoring.md) | 写页面的人：`nac` 函数全表、标记语法、静态页陷阱 |
 | [docs/admin-guide.md](docs/admin-guide.md) | 站长：构建哪几种 exe、证书与 pin、注册表、运营台 |
 | [docs/deploy.md](docs/deploy.md) | 装到 Linux 服务器：安装、加站、升级、排障 |
