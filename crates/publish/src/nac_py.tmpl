@@ -377,13 +377,6 @@ def _cell(text):
     return "".join(out)
 
 
-def link(page, text):
-    """指向另一页。页号不存在时整行不显示，省得点进空白。"""
-    page = int(page)
-    if page in PAGES:
-        _buf.append("[[%d|%s]]" % (page, _cell(text)))
-
-
 def _url(path):
     path = str(path).strip()
     return path if path.startswith("/") else "/" + path
@@ -448,11 +441,6 @@ def _redirect(page, path):
     raise SystemExit(0)
 
 
-def redirect(page):
-    """立刻跳转到另一页；本页已拼好的内容会被丢弃。"""
-    _redirect(page, "")
-
-
 def redirect_path(path):
     """按路径立刻跳转；路径不存在时什么也不做。
 
@@ -462,11 +450,6 @@ def redirect_path(path):
     page = _path_id(path)
     if page is not None:
         _redirect(page, path)
-
-
-def first_page():
-    """本代最小的页号，用来做回首页。"""
-    return min(PAGES) if PAGES else None
 
 
 # ----------------------------------------------------------------- G. 表单
@@ -500,14 +483,6 @@ def textarea(name, label=""):
     name = _cell(name)
     label = _cell(label) or name
     _buf.append("[[textarea %s|%s]]" % (name, label))
-
-
-def select(name, label, options):
-    """下拉选择。"""
-    name = _cell(name)
-    label = _cell(label) or name
-    choices = ";".join(_cell(o) for o in options)
-    _buf.append("[[select %s|%s|%s]]" % (name, label, choices))
 
 
 def check(name, label=""):
@@ -550,9 +525,8 @@ def avatar(name, size=40):
 # 只有这些。没有宽度、没有位置、没有 hover —— 那些由客户端决定，
 # 页面说了不算（见 docs/authoring.md 第 11 节）。
 BOX_KEYS = {
-    "class", "bg", "color", "radius", "border",
-    "ta", "size", "weight", "font", "mono", "italic", "link", "nowrap",
-    "shadow", "opacity",
+    "class", "bg", "color", "radius", "border", "ta", "size", "weight",
+    "font", "mono", "italic", "link", "nowrap", "shadow", "opacity",
 }
 
 
@@ -740,14 +714,6 @@ def session_set(key, value):
     save_session(state)
 
 
-def session_update(**values):
-    """一次写多个键，只读写文件一次。"""
-    state = session()
-    state.update(values)
-    save_session(state)
-    return state
-
-
 def session_pop(key, default=None):
     state = session()
     value = state.pop(key, default)
@@ -881,11 +847,6 @@ def db(name="site.db"):
 def gen():
     """本代代号。"""
     return GEN
-
-
-def titles():
-    """页号 -> 标题 的副本。"""
-    return dict(TITLES)
 
 
 def title_of(page):
@@ -1050,9 +1011,8 @@ text = _Group(
 
 links = _Group(
     "links",
-    link=link, link_path=link_path, inline_path=inline_path,
-    inline_url=inline_url, nav=nav, home=home,
-    redirect=redirect, redirect_path=redirect_path, first_page=first_page,
+    link_path=link_path, inline_path=inline_path, inline_url=inline_url,
+    nav=nav, home=home, redirect_path=redirect_path,
 )
 
 skin = _Group(
@@ -1066,7 +1026,7 @@ skin = _Group(
 forms = _Group(
     "forms",
     form=form, form_path=form_path, field=field, password=password,
-    textarea=textarea, select=select, check=check, hidden=hidden,
+    textarea=textarea, check=check, hidden=hidden,
     prefill=prefill, button=button,
 )
 
@@ -1079,7 +1039,7 @@ req = _Group(
 state = _Group(
     "state",
     session=session, save_session=save_session, session_get=session_get,
-    session_set=session_set, session_update=session_update,
+    session_set=session_set,
     session_pop=session_pop, flash=flash, flashes=flashes,
 )
 
@@ -1098,7 +1058,7 @@ tty = _Group(
 
 site = _Group(
     "site",
-    gen=gen, titles=titles, title_of=title_of, url=url, pages=pages,
+    gen=gen, title_of=title_of, url=url, pages=pages,
 )
 
 flow = _Group("flow", done=done, stop=stop, flush=flush)

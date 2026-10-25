@@ -125,10 +125,14 @@ pub enum Block {
     Heading(u8, Vec<Inline>),
     Para(Vec<Inline>),
     Quote(Vec<Inline>),
-    /// `- item`
-    List(Vec<Vec<Inline>>),
-    /// `1. item` — the numbers written in the source are ignored.
-    Ordered(Vec<Vec<Inline>>),
+    /// `- item` / `* item` / `+ item`, or `1. item` with `ordered`.
+    ///
+    /// The numbers in an ordered list come from the client, not from the source:
+    /// you may write `1.` on every line and still get 1, 2, 3.
+    List {
+        ordered: bool,
+        items: Vec<Vec<Inline>>,
+    },
     /// `| line` runs, or `[[code lang]] … [[end]]`.
     Pre {
         lang: Option<String>,
@@ -158,11 +162,6 @@ pub enum Block {
     Textarea {
         name: String,
         label: String,
-    },
-    Select {
-        name: String,
-        label: String,
-        options: Vec<String>,
     },
     Checkbox {
         name: String,
@@ -328,7 +327,10 @@ fn parse_one(lines: &[&str], i: &mut usize) -> Option<Block> {
                 break;
             }
         }
-        return Some(Block::List(items));
+        return Some(Block::List {
+            ordered: false,
+            items,
+        });
     }
 
     if ordered_item(t).is_some() {
@@ -343,7 +345,10 @@ fn parse_one(lines: &[&str], i: &mut usize) -> Option<Block> {
                 None => break,
             }
         }
-        return Some(Block::Ordered(items));
+        return Some(Block::List {
+            ordered: true,
+            items,
+        });
     }
 
     if t.starts_with('|') {
@@ -520,32 +525,6 @@ fn parse_one(lines: &[&str], i: &mut usize) -> Option<Block> {
         return named_field(rest).map(|(name, label)| Block::Checkbox { name, label });
     }
 
-    if let Some(rest) = t.strip_prefix("[[select ") {
-        *i += 1;
-        let body = rest.trim_end_matches("]]");
-        let mut parts = body.splitn(3, '|');
-        let name = parts.next()?.trim().to_string();
-        let label = parts.next().unwrap_or("").trim().to_string();
-        let options: Vec<String> = parts
-            .next()
-            .unwrap_or("")
-            .split(';')
-            .map(|o| o.trim().to_string())
-            .filter(|o| !o.is_empty())
-            .collect();
-        if name.is_empty() || options.is_empty() {
-            return None;
-        }
-        return Some(Block::Select {
-            name,
-            label: if label.is_empty() {
-                "选择".to_string()
-            } else {
-                label
-            },
-            options,
-        });
-    }
 
     if let Some(rest) = t.strip_prefix("[[button ") {
         *i += 1;
@@ -1503,7 +1482,7 @@ mod tests {
         assert!(blocks.iter().any(|b| matches!(b, Block::Quote(_))));
         assert!(blocks
             .iter()
-            .any(|b| matches!(b, Block::List(items) if items.len() == 2)));
+            .any(|b| matches!(b, Block::List { items, .. } if items.len() == 2)));
         assert!(blocks.iter().any(|b| matches!(b, Block::Image { id: 3, .. })));
         assert!(blocks.iter().any(|b| matches!(
             b,
@@ -1559,7 +1538,7 @@ mod tests {
         // 三种圆点都当无序列表。
         for src in ["- 甲\n- 乙\n", "* 甲\n* 乙\n", "+ 甲\n+ 乙\n"] {
             match &parse(src)[0] {
-                Block::List(items) => assert_eq!(items.len(), 2, "{src}"),
+                Block::List { items, .. } => assert_eq!(items.len(), 2, "{src}"),
                 other => panic!("期望列表，得到 {other:?}（{src}）"),
             }
         }
@@ -1661,7 +1640,7 @@ mod tests {
         let blocks = parse("1. 甲\n2. 乙\n\n---\n");
         assert!(blocks
             .iter()
-            .any(|b| matches!(b, Block::Ordered(items) if items.len() == 2)));
+            .any(|b| matches!(b, Block::List { ordered: true, items } if items.len() == 2)));
         assert!(blocks.iter().any(|b| matches!(b, Block::Hr)));
     }
 
@@ -1703,7 +1682,7 @@ mod tests {
             Block::Note { kind, title, body } => {
                 assert_eq!(*kind, NoteKind::Warn);
                 assert_eq!(plain(title), "小心");
-                assert!(body.iter().any(|b| matches!(b, Block::List(_))));
+                assert!(body.iter().any(|b| matches!(b, Block::List { .. })));
             }
             other => panic!("期望提示框，得到 {other:?}"),
         }
@@ -1731,15 +1710,11 @@ mod tests {
 
     #[test]
     fn form_controls() {
-        let src = "[[textarea body|正文]]\n[[select mode|模式|甲;乙;丙]]\n[[check agree|同意]]\n";
+        let src = "[[textarea body|正文]]\n[[check agree|同意]]\n";
         let blocks = parse(src);
         assert!(blocks.iter().any(
             |b| matches!(b, Block::Textarea { name, label } if name == "body" && label == "正文")
         ));
-        assert!(blocks.iter().any(|b| matches!(
-            b,
-            Block::Select { options, .. } if options == &vec!["甲".to_string(), "乙".to_string(), "丙".to_string()]
-        )));
         assert!(blocks
             .iter()
             .any(|b| matches!(b, Block::Checkbox { name, .. } if name == "agree")));
