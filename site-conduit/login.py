@@ -5,20 +5,19 @@
 
 import nac
 
-from _lib import auth
-from _lib import store
-from _lib import ui
+from _lib import auth, store, ui
 
 db = store.connect()
 user = auth.current(db)
+
+ui.nav(user)
 
 if user:
     nac.h1("已经登录了")
     nac.p("你现在是 ", nac.b(user["username"]), "。")
     nac.gap()
-    nac.link_path("/", "回首页")
-    nac.gap()
-    nac.link_path("/logout", "退出登录")
+    nac.p(nac.inline_path("/", "回首页"), "  ·  ", nac.inline_path("/logout", "退出登录"))
+    ui.footer()
     nac.stop()
 
 message = ""
@@ -30,13 +29,14 @@ if nac.submitted():
         auth.sign_in(row)
         nac.redirect_path("/")
 
-ui.nav(None)
 nac.h1("登录")
+nac.p(nac.i("欢迎回来。"))
+nac.gap()
 ui.errors(message)
 nac.form_path("/login")
 nac.field("email", "邮箱")
 nac.field("password", "密码", secret=True)
 nac.gap()
 nac.button("登录")
-nac.gap()
-nac.p("还没有账号？", nac.inline_path("/register", "注册一个"))
+ui.hint("忘记密码？", "这里没有找回流程：重新注册一个账号，或者忘掉它。")
+ui.footer()

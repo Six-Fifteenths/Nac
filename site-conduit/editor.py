@@ -5,12 +5,11 @@
 
 import nac
 
-from _lib import auth
-from _lib import store
-from _lib import ui
+from _lib import auth, store, ui
 
 db = store.connect()
 user = auth.current(db)
+ui.nav(user)
 auth.require(user, "/editor")
 
 parts = [p for p in nac.path_arg("/editor/").split("/") if p]
@@ -24,6 +23,7 @@ if slug:
         nac.p("地址是 ", nac.tt("/editor/<slug>"), "，也可能不是你写的。")
         nac.gap()
         nac.link_path("/", "回首页")
+        ui.footer()
         nac.stop()
 
 message = ""
@@ -40,12 +40,13 @@ if nac.submitted():
     if new_slug:
         nac.redirect_path("/article/" + new_slug)
 
-ui.nav(user)
 nac.h1("改这篇文章" if row else "写一篇新文章")
-ui.errors(message)
-
 if row:
     nac.p(nac.i("框里已经是现有内容，改完按「保存」。"))
+else:
+    nac.p(nac.i("正文用空行分段。标签用逗号隔开。"))
+nac.gap()
+ui.errors(message)
 
 nac.form_path("/article/" + slug if row else "/editor/")
 
@@ -57,7 +58,9 @@ if row:
 
 nac.field("title", "标题")
 nac.field("description", "一句话简介")
-nac.textarea("body", "正文（空行分段）")
+nac.textarea("body", "正文")
 nac.field("tags", "标签，用逗号隔开")
 nac.gap()
 nac.button("保存" if row else "发布")
+ui.hint("地址是怎么来的？", "标题里的非字母数字换成连字符，就是 /article/<slug>；重名会自动加 -2。")
+ui.footer()

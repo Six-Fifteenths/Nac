@@ -4,17 +4,17 @@
 """文章页。地址后面还能跟动作，因为 Nac 一页只能有一个表单：
 
     /article/<slug>                        读
-    /article/<slug>/fav                    收藏（动作，不是表单）
+    /article/<slug>/fav                    收藏
     /article/<slug>/unfav                  取消收藏
     /article/<slug>/delete                 删掉（只有作者能）
     /article/<slug>/comment/<id>/delete    删评论
+
+原版的收藏/关注/删除是页面上的按钮；这里只能是链接 —— 表单要留给评论。
 """
 
 import nac
 
-from _lib import auth
-from _lib import store
-from _lib import ui
+from _lib import auth, store, ui
 
 db = store.connect()
 user = auth.current(db)
@@ -23,10 +23,13 @@ parts = [p for p in nac.path_arg("/article/").split("/") if p]
 slug = parts[0] if parts else ""
 action = parts[1] if len(parts) > 1 else ""
 
+ui.nav(user)
+
 if not slug:
     nac.h1("文章")
     nac.p("地址要写成 /article/<slug>。")
     nac.link_path("/", "回首页")
+    ui.footer()
     nac.stop()
 
 row = store.article_by_slug(db, user["id"] if user else None, slug)
@@ -35,6 +38,7 @@ if row is None:
     nac.p("它可能被删了，或者地址拼错了。")
     nac.gap()
     nac.link_path("/", "回首页")
+    ui.footer()
     nac.stop()
 
 # ------------------------------------------------------------------ 动作
@@ -61,34 +65,33 @@ if nac.submitted():
         store.add_comment(db, row["id"], user["id"], nac.field_of("comment"))
         nac.redirect_path("/article/" + slug)
 
-ui.nav(user)
-
 # ------------------------------------------------------------------ 正文
 nac.h1(row["title"])
+nac.p(nac.i(row["description"]))
+nac.gap()
 nac.p(
     nac.inline_path("/profile/" + row["author"], row["author"]),
     "  ·  ",
     row["created"],
     "  ·  ♥ ",
     str(row["fav_count"]),
+    "  ·  评论 ",
+    str(row["comment_count"]),
 )
-nac.gap()
-nac.p(nac.b(row["description"]))
-nac.gap()
+nac.hr()
 
 for para in row["body"].split("\n\n"):
     text = para.strip()
     if text:
         nac.p(text)
         nac.gap()
-nac.gap()
 
 if row["tags"]:
     bits = []
     for tag in row["tags"].split(","):
         if bits:
             bits.append("  ")
-        bits.append(nac.inline_path("/tag/" + tag, "#" + tag))
+        bits.append(ui.chip("#" + tag))
     nac.p(*bits)
     nac.gap()
 
@@ -96,15 +99,15 @@ if row["tags"]:
 acts = []
 if user:
     if row["favorited"]:
-        acts.append(nac.inline_path("/article/%s/unfav" % slug, "♥ 已收藏（点一下取消）"))
+        acts.append(nac.inline_path("/article/%s/unfav" % slug, "♥ 已收藏 · 点一下取消"))
     else:
-        acts.append(nac.inline_path("/article/%s/fav" % slug, "♡ 收藏"))
+        acts.append(nac.inline_path("/article/%s/fav" % slug, "♡ 收藏这篇"))
     if row["author_id"] == user["id"]:
         acts.append(nac.inline_path("/editor/" + slug, "编辑"))
         acts.append(nac.inline_path("/article/%s/delete" % slug, "删除"))
 else:
     acts.append(nac.inline_path("/login", "登录后可收藏"))
-nac.p(*ui._joined(acts))
+nac.p(*ui.joined(acts))
 
 # ------------------------------------------------------------------ 评论
 nac.gap()
@@ -118,7 +121,7 @@ for comment in rows:
     nac.p(comment["body"])
     if user and comment["author_id"] == user["id"]:
         nac.p(nac.inline_path("/article/%s/comment/%d/delete" % (slug, comment["id"]), "删掉这条"))
-    nac.gap()
+    nac.hr()
 
 ui.errors(message)
 if user:
@@ -127,3 +130,4 @@ if user:
     nac.button("发表评论")
 else:
     nac.p(nac.i("登录之后才能评论。"), " ", nac.inline_path("/login", "去登录"))
+ui.footer()

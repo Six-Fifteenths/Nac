@@ -5,18 +5,19 @@
 
 import nac
 
-from _lib import auth
-from _lib import store
-from _lib import ui
+from _lib import auth, store, ui
 
 db = store.connect()
 user = auth.current(db)
+
+ui.nav(user)
 
 if user:
     nac.h1("已经登录了")
     nac.p("你现在是 ", nac.b(user["username"]), "。")
     nac.gap()
-    nac.link_path("/", "回首页")
+    nac.p(nac.inline_path("/", "回首页"))
+    ui.footer()
     nac.stop()
 
 message = ""
@@ -31,8 +32,9 @@ if nac.submitted():
         auth.sign_in(row)
         nac.redirect_path("/")
 
-ui.nav(None)
 nac.h1("注册")
+nac.p(nac.i("一个用户名、一个邮箱、一个密码，够了。"))
+nac.gap()
 ui.errors(message)
 nac.form_path("/register")
 nac.field("username", "用户名")
@@ -40,5 +42,5 @@ nac.field("email", "邮箱")
 nac.field("password", "密码", secret=True)
 nac.gap()
 nac.button("注册")
-nac.gap()
-nac.p("已经有账号？", nac.inline_path("/login", "去登录"))
+ui.hint("密码存在哪？", "SQLite 里存的是加盐 SHA-256，不是明文。")
+ui.footer()

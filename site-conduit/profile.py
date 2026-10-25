@@ -6,9 +6,7 @@
 
 import nac
 
-from _lib import auth
-from _lib import store
-from _lib import ui
+from _lib import auth, store, ui
 
 db = store.connect()
 user = auth.current(db)
@@ -17,12 +15,15 @@ parts = [p for p in nac.path_arg("/profile/").split("/") if p]
 name = parts[0] if parts else ""
 tab = parts[1] if len(parts) > 1 else ""
 
+ui.nav(user)
+
 who = store.user_by_name(db, name)
 if who is None:
     nac.h1("没有这个人")
     nac.p("用户 ", nac.tt(name or "(空)"), " 不存在。")
     nac.gap()
     nac.link_path("/", "回首页")
+    ui.footer()
     nac.stop()
 
 if tab == "follow":
@@ -36,11 +37,9 @@ page = 1
 if tab == "favorites" and len(parts) > 2 and parts[2].isdigit():
     page = int(parts[2])
 
-ui.nav(user)
-
 nac.h1(name)
 if who["bio"]:
-    nac.p(who["bio"])
+    nac.p(nac.i(who["bio"]))
 else:
     nac.p(nac.i("这个人还没写简介。"))
 nac.gap()
@@ -60,18 +59,21 @@ else:
 nac.p(*bits)
 nac.gap()
 
-# ------------------------------------------------------------------ 页签
+# ------------------------------------------------- 页签：当前项用胶囊标出
 if tab == "favorites":
-    nac.p(nac.b("收藏"), "  ", nac.inline_path("/profile/" + name, "我的文章"))
+    nac.p(nac.b("收藏"), "    ", nac.inline_path("/profile/" + name, "我的文章"))
     total = store.count_articles(db, favorited_by=name)
     rows = store.article_list(db, user["id"] if user else None, favorited_by=name, page=page)
-    nac.gap()
-    ui.feed(rows, "这个人还没收藏过文章。")
-    ui.pager(page, total, "/profile/%s/favorites" % name)
+    base = "/profile/%s/favorites" % name
+    empty = "这个人还没收藏过文章。"
 else:
-    nac.p(nac.b("我的文章"), "  ", nac.inline_path("/profile/%s/favorites" % name, "收藏"))
+    nac.p(nac.b("我的文章"), "    ", nac.inline_path("/profile/%s/favorites" % name, "收藏"))
     total = store.count_articles(db, author=name)
     rows = store.article_list(db, user["id"] if user else None, author=name, page=page)
-    nac.gap()
-    ui.feed(rows, "这个人还没写过文章。")
-    ui.pager(page, total, "/profile/" + name)
+    base = "/profile/" + name
+    empty = "这个人还没写过文章。"
+nac.gap()
+
+ui.feed(rows, empty)
+ui.pager(page, total, base)
+ui.footer()
