@@ -231,7 +231,13 @@ fn print_msgs(msgs: Vec<ServerMsg>, id: u16, _image: bool) -> Result<(), String>
                 print!("{}", String::from_utf8_lossy(&data));
             }
             ServerMsg::Image { total, .. } => println!("image {id}: {total} bytes"),
-            ServerMsg::Hello { version } => println!("version {version}"),
+            ServerMsg::Hello { version, site } => println!("version {version}  site {site}"),
+            ServerMsg::Resolved {
+                name,
+                endpoint,
+                tls,
+                title,
+            } => println!("{name} -> {endpoint} tls={tls} {title}"),
             ServerMsg::Empty => println!("EMPTY"),
         }
     }

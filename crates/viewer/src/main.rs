@@ -355,6 +355,57 @@ pub enum Address {
     Unknown { site: String, path: String },
 }
 
+/// Where the reader was: a page on a site. Page numbers alone are not enough,
+/// because they only mean something inside one site.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Place {
+    pub site: String,
+    pub path: String,
+}
+
+/// The back/forward stacks. Kept apart from the UI so the rules — including the
+/// ones that cross a site boundary — can be tested without opening a window.
+#[derive(Default)]
+pub struct Trail {
+    back: Vec<Place>,
+    ahead: Vec<Place>,
+}
+
+impl Trail {
+    /// Remembers leaving `from`. Anything that was reachable with "forward" is
+    /// dropped, the same way a browser starts a new branch.
+    fn record(&mut self, from: Option<Place>) {
+        if let Some(place) = from {
+            self.back.push(place);
+        }
+        self.ahead.clear();
+    }
+
+    fn go_back(&mut self, current: Option<Place>) -> Option<Place> {
+        let place = self.back.pop()?;
+        if let Some(here) = current {
+            self.ahead.push(here);
+        }
+        Some(place)
+    }
+
+    fn go_forward(&mut self, current: Option<Place>) -> Option<Place> {
+        let place = self.ahead.pop()?;
+        if let Some(here) = current {
+            self.back.push(here);
+        }
+        Some(place)
+    }
+
+    fn can_back(&self) -> bool {
+        !self.back.is_empty()
+    }
+
+    fn can_forward(&self) -> bool {
+        !self.ahead.is_empty()
+    }
+}
+
 fn parse_address(input: &str, routes: &routes::Routes, current_site: &str) -> Option<Address> {
     let mut s = input.trim();
     if let Some((_, rest)) = s.split_once("://") {
@@ -499,8 +550,7 @@ struct Viewer {
     page_id: Option<u16>,
     title: String,
     blocks: Vec<Block>,
-    history: Vec<u16>,
-    forward: Vec<u16>,
+    trail: Trail,
     home: Option<u16>,
     textures: HashMap<u16, egui::TextureHandle>,
     fields: HashMap<String, String>,
@@ -551,8 +601,7 @@ impl Viewer {
             page_id: None,
             title: String::new(),
             blocks: Vec::new(),
-            history: Vec::new(),
-            forward: Vec::new(),
+            trail: Trail::default(),
             home: None,
             textures: HashMap::new(),
             fields: HashMap::new(),
@@ -642,6 +691,8 @@ impl Viewer {
                     routes::TlsMode::Off
                 };
                 self.routes.learn(&name, &found.endpoint, tls);
+                let from = self.place();
+                self.trail.record(from);
                 self.connect(name, Some(Target::Path(path)));
                 // Until the first page arrives, the site's own name is the most
                 // useful thing the window can say.
@@ -719,8 +770,6 @@ impl Viewer {
         self.loader = loader::Loader::new(endpoint, tls);
         self.textures.clear();
         self.entries.clear();
-        self.history.clear();
-        self.forward.clear();
         self.saved_fields.clear();
         self.home = None;
         self.page_id = None;
@@ -749,6 +798,8 @@ impl Viewer {
         match address {
             Address::Known { site, path } => {
                 if site != self.site {
+                    let from = self.place();
+                    self.trail.record(from);
                     self.connect(site, Some(Target::Path(path)));
                 } else {
                     self.open_path(&path);
@@ -886,31 +937,51 @@ impl Viewer {
         self.focus_input = true;
     }
 
+    /// The current location, if a page is actually showing. Uses the page number
+    /// rather than `shown_path`, because callers set the path *before* asking to
+    /// navigate and that would record the destination instead of the origin.
+    fn place(&self) -> Option<Place> {
+        let path = self
+            .page_id
+            .and_then(|id| self.path_of(id))
+            .or_else(|| self.shown_path.clone())?;
+        Some(Place {
+            site: self.site.clone(),
+            path,
+        })
+    }
+
+    /// Goes to a remembered location, following the site boundary if needed.
+    /// History is preserved: this is what makes the back button work across sites.
+    fn go_place(&mut self, place: Place) {
+        if place.site == self.site {
+            self.open_path(&place.path);
+        } else {
+            self.connect(place.site, Some(Target::Path(place.path)));
+        }
+    }
+
     fn navigate(&mut self, target: u16) {
         if let Some(current) = self.page_id {
             if current != target {
-                self.history.push(current);
+                let from = self.place();
+                self.trail.record(from);
             }
         }
-        self.forward.clear();
         self.load(target);
     }
 
     fn back(&mut self) {
-        if let Some(prev) = self.history.pop() {
-            if let Some(current) = self.page_id {
-                self.forward.push(current);
-            }
-            self.load(prev);
+        let current = self.place();
+        if let Some(prev) = self.trail.go_back(current) {
+            self.go_place(prev);
         }
     }
 
     fn forward(&mut self) {
-        if let Some(next) = self.forward.pop() {
-            if let Some(current) = self.page_id {
-                self.history.push(current);
-            }
-            self.load(next);
+        let current = self.place();
+        if let Some(next) = self.trail.go_forward(current) {
+            self.go_place(next);
         }
     }
 
@@ -931,10 +1002,9 @@ impl Viewer {
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
-        if let Some(current) = self.page_id {
-            self.history.push(current);
+        if let Some(place) = self.place() {
+            self.trail.record(Some(place));
         }
-        self.forward.clear();
         // The submission consumed what was typed; coming back here later should
         // start clean.
         self.saved_fields.remove(&target);
@@ -1524,7 +1594,7 @@ impl eframe::App for Viewer {
             ui.horizontal(|ui| {
                 if ui
                     .add_enabled(
-                        !self.history.is_empty(),
+                        self.trail.can_back(),
                         egui::Button::new(RichText::new("←").size(18.0)),
                     )
                     .on_hover_text("返回  (Esc / Alt+←)")
@@ -1534,7 +1604,7 @@ impl eframe::App for Viewer {
                 }
                 if ui
                     .add_enabled(
-                        !self.forward.is_empty(),
+                        self.trail.can_forward(),
                         egui::Button::new(RichText::new("→").size(18.0)),
                     )
                     .on_hover_text("前进  (Alt+→)")
@@ -1662,7 +1732,10 @@ impl eframe::App for Viewer {
 
 #[cfg(test)]
 mod tests {
-    use super::{net, normalize_path, parse_address, resolve_path, routes, stash_fields, Address};
+    use super::{
+        net, normalize_path, parse_address, resolve_path, routes, stash_fields, Address, Place,
+        Trail,
+    };
     use std::collections::HashMap;
 
     #[test]
@@ -1801,6 +1874,59 @@ mod tests {
             Some("10.0.0.5:7100")
         );
         assert_eq!(r.get("shop").map(|s| s.tls), Some(routes::TlsMode::On));
+    }
+
+    #[test]
+    fn back_crosses_a_site_boundary() {
+        let mut trail = Trail::default();
+        let home = Place {
+            site: "home".into(),
+            path: "/".into(),
+        };
+        let shop = Place {
+            site: "shop".into(),
+            path: "/hats".into(),
+        };
+        assert!(!trail.can_back());
+
+        // Reading home, then following a link that lands on another site.
+        trail.record(Some(home.clone()));
+        assert!(trail.can_back());
+        assert!(!trail.can_forward());
+
+        assert_eq!(trail.go_back(Some(shop.clone())), Some(home.clone()));
+        assert!(!trail.can_back());
+        assert!(trail.can_forward());
+
+        assert_eq!(trail.go_forward(Some(home.clone())), Some(shop));
+    }
+
+    #[test]
+    fn a_new_step_drops_the_forward_branch() {
+        let mut trail = Trail::default();
+        let one = Place {
+            site: "home".into(),
+            path: "/one".into(),
+        };
+        let two = Place {
+            site: "home".into(),
+            path: "/two".into(),
+        };
+        let other = Place {
+            site: "notes".into(),
+            path: "/".into(),
+        };
+        trail.record(Some(one.clone()));
+        assert_eq!(trail.go_back(Some(two.clone())), Some(one.clone()));
+        assert!(trail.can_forward());
+
+        // Going somewhere new makes the old "forward" unreachable.
+        trail.record(Some(two.clone()));
+        assert!(!trail.can_forward());
+
+        // and the stack now holds `one` then `two`.
+        assert_eq!(trail.go_back(Some(other)), Some(two));
+        assert!(!trail.can_back());
     }
 
     #[test]
