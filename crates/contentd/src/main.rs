@@ -508,7 +508,9 @@ fn serve_page(
         return vec![page_frame(id, &bytes, 0)];
     }
 
-    if depth >= 1 {
+    // Allow one redirect so a form handler can POST, write, then redirect back
+    // to itself. A second redirect is treated as a loop.
+    if depth >= 2 {
         return vec![ServerMsg::Empty];
     }
 
