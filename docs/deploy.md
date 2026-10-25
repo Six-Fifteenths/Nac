@@ -8,30 +8,40 @@
 ## 1. 服务器上长什么样
 
 ```
-/srv/nac/
+/srv/nac/                        主站（名字 home）
 ├─ bin/contentd             内容服务（strip + LTO）
 ├─ bin/publish              发布工具（运营台的「发布」按钮会调它）
 ├─ bin/probe                探针：健康检查与排障
-├─ site/                    公开站页面
+├─ site/                    主站页面
 ├─ admin/site/              运营台页面（同样的路径规则）
-├─ data/                    公开站：current / gen/ / state/ / appdata/
+├─ data/                    主站：current / gen/ / state/ / appdata/
 ├─ admin/data/              运营台自己的代与会话（与公开站隔离）
 ├─ archive/                 原图归档（用 --archive 时才有）
 ├─ data/access.jsonl        访问日志（配 --log 时写）
-└─ sites.json               站点注册表（客户端按名字找站时用它回答，可选）
+└─ sites.json               站点注册表：客户端按名字找站时用它回答
+
+/srv/nac-shop/                   其它站各占一个同级目录（名字见注册表）
+├─ site/                    shop 的页面
+├─ data/                    shop 自己的代、会话、数据库
+└─ archive/
 ```
 
+每个站是**一个独立进程**：自己的端口、自己的 `data/`、自己的数据库。它们互相看不见
+对方的数据，唯一的联系是 `sites.json` 里那几行地址。
+
 **可再生**：`data/gen/`、`data/state/`、`admin/data/gen/`。
-**要备份**：`site/`、`admin/site/`、`data/appdata/`、`archive/`、`sites.json`。
+**要备份**：`site/`、`admin/site/`、`data/appdata/`、`archive/`、`sites.json`，
+以及每个额外站点的 `site/` 与 `data/appdata/`。
 
 ## 2. 端口与身份
 
 | 服务 | 端口 | 绑定 | 用户 | 说明 |
 |---|---|---|---|---|
-| `nac-contentd` | 7000 | `127.0.0.1` 或 `0.0.0.0` | `nac-public` | 公开站 |
+| `nac-contentd` | 7000 | `127.0.0.1` 或 `0.0.0.0` | `nac-public` | 主站（`--name home`） |
 | `nac-console` | 7001 | `127.0.0.1` | `nac-console` | 运营台，只能是回环 |
+| `nac-contentd-<名字>` | 7002 起 | 抄主站的 `--bind` | `nac-public` | 其它站，一站一个进程 |
 
-加站点时建议从 7002 起，一个站一个进程、一份数据目录。
+加站点用 `deploy/add-site.sh`；端口默认从 7002 往上找空的。
 
 ## 3. 安装
 
@@ -122,40 +132,47 @@ ufw allow 7000/tcp        # 或 firewalld 的等价命令
 ## 5. 加一个站点
 
 ```bash
-# 1. 目录与源码
-install -d -m 2770 -o nac-public -g nac-share /srv/nac/sites/shop
-cp -r shop-src/* /srv/nac/sites/shop/ && chown -R root:nac-share /srv/nac/sites/shop
-
-# 2. 数据目录与首次发布
-install -d -m 2770 -o nac-public -g nac-share /srv/nac/shop-data
-runuser -u nac-public -- /srv/nac/bin/publish --site /srv/nac/sites/shop --data /srv/nac/shop-data
-
-# 3. unit：复制 nac-contentd.service，改 --data / --port / --name
-cp deploy/nac-contentd.service /etc/systemd/system/nac-shop.service
-#   --data /srv/nac/shop-data
-#   --port 7002
-#   --name shop
-#   --registry /srv/nac/sites.json
-sed -i 's#/srv/nac#/srv/nac#g' /etc/systemd/system/nac-shop.service
-systemctl daemon-reload && systemctl enable --now nac-shop
-
-# 4. 注册表：加一行（这一步不需要动客户端）
+cd /root/Nac
+./deploy/add-site.sh shop --site site-shop --port 7002 --host 199.7.140.217
 ```
 
-`sites.json`：
+脚本是幂等的：再跑一次就是更新那个站。它依次做：
+
+| 步骤 | 位置 |
+|---|---|
+| 建目录 | `/srv/nac-shop/{site,data,archive}`，属 `nac-public:nac-share`、2770 |
+| 发布 | `/srv/nac-shop/data/gen/<代数>`，由 `publish` 生成 |
+| 装 unit | `/etc/systemd/system/nac-contentd-shop.service` |
+| 登记 | `/srv/nac/sites.json` 里一条 |
+
+绑定地址不传就抄主站 unit 里的 `--bind`，端口不传就从 7002 往上找空的。
+
+`sites.json` 最终长这样：
 
 ```json
 {
-  "home": {"host": "199.7.140.217", "port": 7000, "tls": true, "title": "演示站"},
-  "shop": {"host": "199.7.140.217", "port": 7002, "tls": true, "title": "商店"}
+  "home": {"host": "199.7.140.217", "port": 7000, "tls": true, "title": "主站"},
+  "shop": {"host": "199.7.140.217", "port": 7002, "tls": true, "title": "小器物"}
 }
 ```
 
-改完重启相关服务即可让客户端立刻认出新站：
+**主站自己也必须带 `--name` 和 `--registry`**，否则它答不出"别的站在哪"。
+`install.sh` 会自动写好；手工装的话别漏了这两行：
+
+```
+    --name home \
+    --registry /srv/nac/sites.json \
+```
+
+验收（三条都通才算好）：
 
 ```bash
-systemctl restart nac-contentd nac-shop
+systemctl is-active nac-contentd-shop
+/srv/nac/bin/probe --tls-pin-file /etc/ssl/nac/public.pin --addr 199.7.140.217:7000 resolve shop
+/srv/nac/bin/probe --tls-pin-file /etc/ssl/nac/public.pin --addr 199.7.140.217:7002 hello
 ```
+
+防火墙要放行新端口（本例 7002），否则客户端拿到了地址却连不上。
 
 ## 6. 升级
 

@@ -40,12 +40,13 @@ console MTI3LjAuMC4xOjcwMDE=       plain ssh=root@example.test
 
 ## 3. 站点注册表：加站不用重发客户端
 
-每个 contentd 可以用 `--registry sites.json` 说明自己认识哪些站：
+每个 contentd 用 `--registry /srv/nac/sites.json` 说明自己认识哪些站，同时用
+`--name` 说明自己叫什么：
 
 ```json
 {
-  "home": {"host": "199.7.140.217", "port": 7000, "tls": true,  "title": "演示站"},
-  "shop": {"host": "199.7.140.217", "port": 7002, "tls": true,  "title": "商店"}
+  "home": {"host": "199.7.140.217", "port": 7000, "tls": true, "title": "主站"},
+  "shop": {"host": "199.7.140.217", "port": 7002, "tls": true, "title": "小器物"}
 }
 ```
 
@@ -56,6 +57,14 @@ console MTI3LjAuMC4xOjcwMDE=       plain ssh=root@example.test
 
 - **单中心**：一台机器上几个站，各自的 registry 都列全所有站
 - **节点**：A 只列 A、B；B 只列 B、C。从 A 能到 B，从 B 能到 C
+
+排障用 `probe resolve` —— 问的正是客户端问的那句话：
+
+```bash
+/srv/nac/bin/probe --tls-pin-file /etc/ssl/nac/public.pin \
+    --addr 199.7.140.217:7000 resolve shop
+# shop -> 199.7.140.217:7002  tls  小器物
+```
 
 注意：回答没有签名，所以服务器可以引荐任意地址。所有站点都是你自己的时候这没问题。
 
@@ -161,18 +170,38 @@ sudo -u nac-public /srv/nac/bin/publish --site /srv/nac/site --data /srv/nac/dat
 
 ## 9. 加一个站的完整步骤
 
+一条命令，可重复运行（已存在就更新它）：
+
 ```bash
-# 1. 目录与站点源码
-install -d -o nac-public -g nac-share -m 2770 /srv/nac/sites/shop
-
-# 2. 发布
-sudo -u nac-public /srv/nac/bin/publish --site /srv/nac/sites/shop --data /srv/nac/shop-data
-
-# 3. 一个 unit（复制 nac-contentd.service，改 --data / --port / --name）
-#    端口建议 7002 起，仍绑 0.0.0.0（公开站）
-
-# 4. 在两个站的 sites.json 里互相登记（这一步不需要动客户端）
+cd /root/Nac
+./deploy/add-site.sh shop --site site-shop --port 7002 --host 199.7.140.217
 ```
+
+它做四件事，每一步都可以手工复现：
+
+| 步骤 | 结果 |
+|---|---|
+| 建目录 | `/srv/nac-shop/{site,data,archive}`，权限与公开站一致（2770 / setgid） |
+| 发布 | 以 `nac-public` 身份跑 `publish`，产出 `/srv/nac-shop/data/gen/<代数>` |
+| 装 unit | 由 `deploy/nac-contentd-site.service` 生成 `nac-contentd-shop.service`，沙箱与主站完全相同 |
+| 登记 | 往 `/srv/nac/sites.json` 加一条，客户端立刻就能认出新站 |
+
+新站绑定的地址默认抄主站 unit 里的 `--bind`，避免"主站能连、新站连不上"。
+
+验收：
+
+```bash
+systemctl is-active nac-contentd-shop
+/srv/nac/bin/probe --tls-pin-file /etc/ssl/nac/public.pin \
+    --addr 199.7.140.217:7000 resolve shop      # 主站知道 shop 在哪
+/srv/nac/bin/probe --tls-pin-file /etc/ssl/nac/public.pin \
+    --addr 199.7.140.217:7002 hello             # 新站自报名字
+```
+
+然后在客户端地址栏写 `shop.nac.local/`。
+
+**每站一个进程**是有意的：两个站看不见对方的数据库、会话和文件，唯一的联系是
+注册表里那几行地址。
 
 ## 10. 排障
 
