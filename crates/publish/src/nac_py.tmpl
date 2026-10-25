@@ -328,8 +328,32 @@ def figure(path, caption=None, width=None):
 # ----------------------------------------------------------------- F. 导航
 
 def _cell(text):
-    """标记里有三个容器字符不能出现在标签与链接文字里。"""
-    return str(text).replace("|", "／").replace("]]", "]").replace("\n", " ")
+    """清掉会打断表格/容器的字符，但保留 [[path:...|...]] 里的分隔符。"""
+    text = str(text).replace("\n", " ")
+    out = []
+    depth = 0
+    i = 0
+    while i < len(text):
+        if text.startswith("[[", i):
+            depth += 1
+            out.append("[[")
+            i += 2
+            continue
+        if text.startswith("]]", i) and depth:
+            depth -= 1
+            out.append("]]")
+            i += 2
+            continue
+        ch = text[i]
+        if ch == "|" and depth == 0:
+            out.append("／")
+        elif ch == "]" and not depth and i + 1 < len(text) and text[i + 1] == "]":
+            out.append("]")
+            i += 1
+        else:
+            out.append(ch)
+        i += 1
+    return "".join(out)
 
 
 def link(page, text):

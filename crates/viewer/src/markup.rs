@@ -506,8 +506,35 @@ fn inner_spec(rest: &str) -> &str {
 }
 
 fn cells(line: &str) -> Vec<Vec<Inline>> {
-    let inner = line.trim().trim_matches('|');
-    inner.split('|').map(|c| inlines(c.trim())).collect()
+    let inner = line.trim();
+    let inner = inner.strip_prefix('|').unwrap_or(inner);
+    let inner = inner.strip_suffix('|').unwrap_or(inner);
+    let mut out = Vec::new();
+    let mut buf = String::new();
+    let mut depth = 0usize;
+    let mut chars = inner.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '[' && chars.peek() == Some(&'[') {
+            depth += 1;
+            buf.push('[');
+            buf.push(chars.next().unwrap_or('['));
+            continue;
+        }
+        if c == ']' && chars.peek() == Some(&']') && depth > 0 {
+            depth -= 1;
+            buf.push(']');
+            buf.push(chars.next().unwrap_or(']'));
+            continue;
+        }
+        if c == '|' && depth == 0 {
+            out.push(inlines(buf.trim()));
+            buf.clear();
+            continue;
+        }
+        buf.push(c);
+    }
+    out.push(inlines(buf.trim()));
+    out
 }
 
 /// `[[input name|标签]]` and friends: the name defaults to the label when the
@@ -832,6 +859,22 @@ mod tests {
                 assert_eq!(plain(&header[0]), "名字");
                 assert_eq!(rows.len(), 2);
                 assert_eq!(rows[0][1], vec![Inline::Bold("第一".into())]);
+            }
+            other => panic!("期望表格，得到 {other:?}"),
+        }
+    }
+
+    #[test]
+    fn table_cells_can_hold_inline_links() {
+        let src = "[[table]]\n| 页面 | 路径 |\n| [[path:/notes/|笔记]] | `/notes/` |\n[[end]]\n";
+        match only(&parse(src)) {
+            Block::Table { rows, .. } => {
+                assert_eq!(rows.len(), 1);
+                assert_eq!(rows[0].len(), 2);
+                assert!(matches!(
+                    &rows[0][0][0],
+                    Inline::Link { target: LinkTarget::Path(path), text } if path == "/notes/" && text == "笔记"
+                ));
             }
             other => panic!("期望表格，得到 {other:?}"),
         }
