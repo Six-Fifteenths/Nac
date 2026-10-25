@@ -1,10 +1,10 @@
-//! A very small style system: the subset of CSS this client understands.
+//! A very small style system: the part of CSS this client is willing to read.
 //!
-//! There is no cascade, no inheritance chains and no selectors beyond a class
-//! name. What there is: a box that can be told its background, border, padding,
-//! spacing, width and direction, and text that inherits colour, size and family
-//! from the box it sits in. That is enough for a real layout — a green navbar, a
-//! card with a border, an 8:4 two-column page — without inventing a browser.
+//! No cascade, no selectors beyond a class name, and — deliberately — no way to
+//! say where something goes or how wide it is. A page describes *what a thing
+//! is* (a card, a navbar, an aside); the client decides the layout. That is why
+//! there is no `width`, no `position`, no percentage and no media query here:
+//! the same page has to work in a 700px window and a 2000px one.
 //!
 //! Values are written either as attributes (`pad=16 bg=#fff`) or as declarations
 //! in a stylesheet (`pad: 16; bg: #fff;`). Both go through [`Style::set`], so a
@@ -12,30 +12,12 @@
 
 use eframe::egui::{self, Color32};
 
-/// What a box paints at one instant, after any hover blend.
-pub struct Painted {
-    pub bg: Option<Color32>,
-    pub border: Option<(f32, Color32)>,
-}
-
-pub fn lerp_color(a: Color32, b: Color32, t: f32) -> Color32 {
-    let f = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
-    Color32::from_rgba_unmultiplied(
-        f(a.r(), b.r()),
-        f(a.g(), b.g()),
-        f(a.b(), b.b()),
-        f(a.a(), b.a()),
-    )
-}
-
-/// `None` on either side means "leave it alone", which is what a background
-/// that does not change on hover should do.
-fn mix(base: Option<Color32>, hover: Option<Color32>, t: f32) -> Option<Color32> {
-    match (base, hover) {
-        (_, None) => base,
-        (None, Some(h)) => Some(h.gamma_multiply(t)),
-        (Some(a), Some(h)) => Some(lerp_color(a, h, t)),
-    }
+/// A drop shadow: blur radius, vertical offset, colour.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Shadow {
+    pub blur: f32,
+    pub offset: f32,
+    pub color: Color32,
 }
 
 fn family(name: &str) -> egui::FontFamily {
@@ -87,33 +69,23 @@ pub struct Style {
     /// Horizontal, vertical.
     pub margin: Option<(f32, f32)>,
     pub gap: Option<f32>,
-    pub width: Option<f32>,
-    pub max_width: Option<f32>,
-    pub min_height: Option<f32>,
     pub radius: Option<f32>,
     /// Width, colour.
     pub border: Option<(f32, Color32)>,
-    /// `dir=row`. `None` means column, which is the document default.
+    /// `dir=row`. `None` means column, which is the document default. This is
+    /// the only layout attribute there is: the client, not the page, decides
+    /// how wide the columns turn out.
     pub row: Option<bool>,
-    /// Share of the leftover width when the parent is a row.
-    pub grow: Option<f32>,
-    pub align: Option<Align>,
-    /// Where the text sits inside its box, as opposed to where the box sits
-    /// inside its parent (`align`).
+    /// Where the text sits inside its box.
     pub text_align: Option<Align>,
     pub size: Option<f32>,
     pub weight: Option<Weight>,
     pub font: Option<Font>,
     pub italic: Option<bool>,
     pub link: Option<Color32>,
-    /// What the box looks like while the pointer is over it. A hover only ever
-    /// changes paint, never layout, so nothing jumps when the mouse arrives.
-    pub hover_bg: Option<Color32>,
-    pub hover_color: Option<Color32>,
-    pub hover_border: Option<(f32, Color32)>,
-    pub hover_link: Option<Color32>,
-    /// Fade time in milliseconds; 0 means the change is instant.
-    pub transition: Option<f32>,
+    pub shadow: Option<Shadow>,
+    /// 0..1. `None` means fully opaque.
+    pub opacity: Option<f32>,
     /// `nowrap`: do not wrap lines (a navbar, a tag row).
     pub nowrap: Option<bool>,
 }
@@ -128,25 +100,17 @@ impl Style {
             pad: self.pad.or(base.pad),
             margin: self.margin.or(base.margin),
             gap: self.gap.or(base.gap),
-            width: self.width.or(base.width),
-            max_width: self.max_width.or(base.max_width),
-            min_height: self.min_height.or(base.min_height),
             radius: self.radius.or(base.radius),
             border: self.border.or(base.border),
             row: self.row.or(base.row),
-            grow: self.grow.or(base.grow),
-            align: self.align.or(base.align),
             text_align: self.text_align.or(base.text_align),
             size: self.size.or(base.size),
             weight: self.weight.or(base.weight),
             font: self.font.or(base.font),
             italic: self.italic.or(base.italic),
             link: self.link.or(base.link),
-            hover_bg: self.hover_bg.or(base.hover_bg),
-            hover_color: self.hover_color.or(base.hover_color),
-            hover_border: self.hover_border.or(base.hover_border),
-            hover_link: self.hover_link.or(base.hover_link),
-            transition: self.transition.or(base.transition),
+            shadow: self.shadow.or(base.shadow),
+            opacity: self.opacity.or(base.opacity),
             nowrap: self.nowrap.or(base.nowrap),
         }
     }
@@ -162,9 +126,6 @@ impl Style {
             "pad" | "padding" => self.pad = pair(value),
             "margin" => self.margin = pair(value),
             "gap" => self.gap = number(value),
-            "w" | "width" => self.width = number(value),
-            "maxw" | "max-width" => self.max_width = number(value),
-            "minh" | "min-height" => self.min_height = number(value),
             "radius" | "border-radius" => self.radius = number(value),
             "border" => self.border = border(value),
             "dir" | "display" => {
@@ -174,17 +135,8 @@ impl Style {
                     _ => None,
                 }
             }
-            "grow" | "flex" => self.grow = number(value),
             "ta" | "text-align" | "halign" => {
                 self.text_align = match value {
-                    "center" => Some(Align::Center),
-                    "right" | "end" => Some(Align::Right),
-                    "left" | "start" => Some(Align::Left),
-                    _ => None,
-                }
-            }
-            "align" => {
-                self.align = match value {
                     "center" => Some(Align::Center),
                     "right" | "end" => Some(Align::Right),
                     "left" | "start" => Some(Align::Left),
@@ -202,13 +154,8 @@ impl Style {
             "font" | "mono" | "font-family" => self.font = Font::parse(value),
             "italic" | "font-style" => self.italic = Some(value == "italic"),
             "link" => self.link = color(value),
-            "hover-bg" | "hover-background" => self.hover_bg = color(value),
-            "hover-color" | "hover-fg" => self.hover_color = color(value),
-            "hover-border" => self.hover_border = border(value),
-            "hover-link" => self.hover_link = color(value),
-            "transition" => {
-                self.transition = number(&value.replace("ms", "")).map(|ms| ms / 1000.0)
-            }
+            "shadow" => self.shadow = shadow(value),
+            "opacity" => self.opacity = opacity(value),
             "nowrap" | "white-space" => self.nowrap = Some(value == "nowrap"),
             _ => {}
         }
@@ -240,19 +187,6 @@ impl Style {
             style.set(key, value);
         }
         style
-    }
-
-    /// The style a pointer-over box actually paints with, `t` of the way there.
-    pub fn blend(&self, t: f32) -> Painted {
-        let t = t.clamp(0.0, 1.0);
-        Painted {
-            bg: mix(self.bg, self.hover_bg, t),
-            border: match (self.border, self.hover_border) {
-                (None, Some(h)) => Some((h.0, h.1.gamma_multiply(t))),
-                (Some(a), Some(h)) => Some((h.0, lerp_color(a.1, h.1, t))),
-                (b, None) => b,
-            },
-        }
     }
 
 }
@@ -317,13 +251,46 @@ impl Text {
     }
 }
 
+/// `16` or `16px`. Nothing else: no `%`, no `calc()`, no `em`.
+///
+/// This is the third rule of the style layer, held in code rather than in a
+/// comment: a page may say how large something is, it may not ask the client to
+/// work out a size. `50%` used to be read as 50 pixels, which is worse than
+/// refusing it.
 fn number(value: &str) -> Option<f32> {
-    value
-        .trim()
-        .trim_end_matches("px")
-        .trim_end_matches('%')
-        .parse::<f32>()
-        .ok()
+    let value = value.trim();
+    let digits = value.strip_suffix("px").unwrap_or(value);
+    if digits.is_empty() || !digits.chars().all(|c| c.is_ascii_digit() || c == '.' || c == '-') {
+        return None;
+    }
+    digits.parse::<f32>().ok()
+}
+
+/// `8` = blur 8, offset 0; `8,3` adds a downward offset; `8,3:#00000033` a colour.
+fn shadow(value: &str) -> Option<Shadow> {
+    let (sizes, color) = match value.split_once(':') {
+        Some((sizes, colour)) => (sizes, color(colour).unwrap_or(Color32::from_black_alpha(40))),
+        None => (value, Color32::from_black_alpha(40)),
+    };
+    let mut parts = sizes.split(',');
+    let blur = number(parts.next()?)?;
+    // No offset means a shadow straight behind the box, not one 8px lower.
+    let offset = parts.next().and_then(number).unwrap_or(0.0);
+    if blur <= 0.0 {
+        return None;
+    }
+    Some(Shadow {
+        blur,
+        offset,
+        color,
+    })
+}
+
+/// `0.6` and `60` both mean 60%.
+fn opacity(value: &str) -> Option<f32> {
+    let amount = number(value)?;
+    let fraction = if amount > 1.0 { amount / 100.0 } else { amount };
+    Some(fraction.clamp(0.0, 1.0))
 }
 
 /// `16` → (16,16); `16,24` → (16,24).
@@ -360,6 +327,14 @@ pub fn color(value: &str) -> Option<Color32> {
             let g = expand(&hex[2..4])?;
             let b = expand(&hex[4..6])?;
             Some(Color32::from_rgb(r, g, b))
+        }
+        // `#rrggbbaa`, which is how a shadow says how soft it is.
+        8 => {
+            let r = expand(&hex[0..2])?;
+            let g = expand(&hex[2..4])?;
+            let b = expand(&hex[4..6])?;
+            let a = expand(&hex[6..8])?;
+            Some(Color32::from_rgba_unmultiplied(r, g, b, a))
         }
         _ => None,
     }
@@ -417,27 +392,47 @@ mod tests {
     }
 
     #[test]
-    fn a_hover_never_changes_the_box_only_its_paint() {
-        let quiet = Style::from_attrs("bg=#ffffff border=1:#dddddd");
-        let loud = Style::from_attrs(
-            "bg=#ffffff border=1:#dddddd hover-bg=#ffe9e9 hover-border=3:#cc0000 transition=200",
+    fn shadow_and_opacity_take_sizes_not_expressions() {
+        let plain = Style::from_attrs("shadow=8");
+        let shadow = plain.shadow.expect("shadow parses");
+        assert_eq!(shadow.blur, 8.0);
+        assert_eq!(shadow.offset, 0.0);
+        assert!(shadow.color.a() > 0, "a shadow is visible by default");
+
+        let deep = Style::from_attrs("shadow=12,4:#000000").shadow.unwrap();
+        assert_eq!((deep.blur, deep.offset), (12.0, 4.0));
+
+        assert_eq!(Style::from_attrs("shadow=0").shadow, None);
+        assert_eq!(Style::from_attrs("opacity=0.6").opacity, Some(0.6));
+        assert_eq!(Style::from_attrs("opacity=60").opacity, Some(0.6));
+        assert_eq!(Style::from_attrs("opacity=200").opacity, Some(1.0));
+        assert_eq!(Style::from_attrs("opacity=20%").opacity, None);
+    }
+
+    /// The rules the style layer is not allowed to break. They are tests rather
+    /// than a paragraph in a document, so that adding `position`, a width or a
+    /// selector later fails here first.
+    #[test]
+    fn the_style_layer_refuses_to_become_css() {
+        // 1. Numbers are numbers: no percentages, no expressions.
+        assert_eq!(number("16"), Some(16.0));
+        assert_eq!(number("16px"), Some(16.0));
+        assert_eq!(number("50%"), None);
+        assert_eq!(number("calc(50% - 4px)"), None);
+        assert_eq!(number("2em"), None);
+        // 2. No geometry. A page describes structure, never a size or a place.
+        let placed = Style::from_attrs(
+            "position=absolute x=10 y=20 top=4 left=4 float=left w=200 maxw=980 grow=2 \
+             minh=40 align=center",
         );
-        // Nothing set: the box looks the same at every point of the hover.
-        let still = quiet.blend(1.0);
-        assert_eq!(still.bg, quiet.bg);
-        assert_eq!(still.border, quiet.border);
-        // Halfway: the colours are between the two ends, not either end.
-        let half = loud.blend(0.5);
-        assert_eq!(half.bg, Some(Color32::from_rgb(0xff, 0xf4, 0xf4)));
-        assert_eq!(half.border.map(|b| b.0), Some(3.0));
-        // Fully hovered: exactly the hover colour.
-        assert_eq!(loud.blend(1.0).bg, Some(Color32::from_rgb(0xff, 0xe9, 0xe9)));
-        assert_eq!(loud.blend(1.0).border, Some((3.0, Color32::from_rgb(0xcc, 0, 0))));
-        // A box with no background fades one in from nothing rather than jumping.
-        let bare = Style::from_attrs("hover-bg=#ffe9e9");
-        assert_eq!(bare.blend(0.0).bg.map(|c| c.a()), Some(0));
-        let mid = bare.blend(0.5).bg.unwrap().a();
-        assert!(mid > 0 && mid < 255, "halfway there, got alpha {mid}");
+        assert_eq!(placed.pad, None);
+        assert_eq!(placed.margin, None);
+        assert_eq!(placed.row, None);
+        assert_eq!(placed.text_align, None);
+
+        // 3. No media queries, no animation beyond the hover fade.
+        let media = Style::from_declarations("@media (max-width: 600px): pad: 4;");
+        assert_eq!(media.pad, None);
     }
 
     #[test]

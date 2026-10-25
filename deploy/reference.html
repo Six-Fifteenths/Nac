@@ -6,6 +6,9 @@
   values Nac uses, so the difference between the two pictures is the renderer
   and nothing else. It is not part of any site.
 
+  It tracks the sheet in site-conduit/_lib/ui.py. Since the style layer lost
+  width, alignment and hover (see docs/authoring.md 11), so did this file.
+
   To open it, the fonts have to sit beside it (Chromium refuses to load a font
   from a parent directory over file://):
 
@@ -28,13 +31,13 @@
 html, body { margin: 0; padding: 0; background: #f7f7f7; }
 body { font-family: 'PT Serif', 'Microsoft YaHei', serif; color: #373a3c; font-size: 17px; }
 
-/* .page { maxw: 980; pad: 0,16 } */
-.page { max-width: 980px; margin: 0 auto; padding: 0 16px; }
+/* .page { pad: 0,16 } —— 没有 max-width：宽度由客户端决定 */
+.page { padding: 0 16px; }
 
 /* .nav { bg:#5cb85c pad:8,16 size:15 weight:bold } */
 .nav { background: #5cb85c; color: #fff; padding: 8px 16px; font-family: 'Titillium Web', sans-serif;
        font-size: 15px; font-weight: 700; }
-.nav .brand { font-size: 24px; width: 150px; }
+.nav .brand { font-size: 24px; flex: 1; }
 .nav a { color: #fff; text-decoration: none; }
 
 /* .hero { bg:#5cb85c pad:32,32 align:center } */
@@ -42,8 +45,9 @@ body { font-family: 'PT Serif', 'Microsoft YaHei', serif; color: #373a3c; font-s
 .hero .title { font-size: 56px; font-weight: 700; margin: 12px 0 8px; }
 .hero .sub { font-size: 24px; font-style: italic; margin: 8px 0 12px; }
 
-/* .card { bg:#fff border:1px:#ddd radius:4 pad:20 margin:0,24 } */
-.card { background: #fff; border: 1px solid #ddd; border-radius: 4px; padding: 20px; margin: 24px 0; }
+/* .card { bg:#fff border:1px:#ddd radius:4 pad:20 margin:0,24 shadow:8,2:#0000001f } */
+.card { background: #fff; border: 1px solid #ddd; border-radius: 4px; padding: 20px; margin: 24px 0;
+        box-shadow: 0 2px 8px rgba(0,0,0,.12); }
 .card h3 { font-size: 18.7px; font-weight: 700; margin: 14px 0 6px; }
 /* .lead { color:#999 size:16 } */
 .lead { color: #999; font-size: 16px; margin: 8px 0; }
@@ -56,10 +60,9 @@ body { font-family: 'PT Serif', 'Microsoft YaHei', serif; color: #373a3c; font-s
 .side a { color: #5cb85c; text-decoration: none; }
 .side p { margin: 6px 0; }
 
-/* 2:1 两栏，gap 24 */
+/* 横排：客户端平分，gap 24 */
 .row { display: flex; gap: 24px; align-items: flex-start; }
-.col-a { flex: 2; }
-.col-b { flex: 1; }
+.col-a, .col-b { flex: 1; }
 
 .avatar { display: inline-block; width: 28px; height: 28px; border-radius: 4px; background: #d9c9a3;
           color: #fff; font-family: 'Titillium Web', sans-serif; font-weight: 700; font-size: 13px;

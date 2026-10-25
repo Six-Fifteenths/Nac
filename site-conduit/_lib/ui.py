@@ -14,17 +14,15 @@ from _lib import store
 # 每条规则写成一行：sheet() 会逐行发出去，跨行会被拆坏。
 # 数值照抄 Conduit 原版的样式表（rem 按 16px 折算）。
 SHEET = """
-.page { maxw: 980; align: center; pad: 0,16; font: serif; color: #373a3c; }
+.page { pad: 0,16; font: serif; color: #373a3c; }
 .nav { bg: #5cb85c; color: #ffffff; pad: 8,16; size: 15; weight: bold; link: #ffffff; font: sans; }
 .brand { size: 24; weight: bold; color: #ffffff; link: #ffffff; font: sans; }
 .hero { bg: #5cb85c; color: #ffffff; pad: 32,32; ta: center; }
 .hero-title { color: #ffffff; size: 56; weight: bold; ta: center; font: serif; }
 .hero-sub { color: #ffffff; size: 24; ta: center; font: serif; italic: 1; }
-.card { bg: #ffffff; border: 1px:#dddddd; radius: 4; pad: 20; margin: 0,24; hover-border: 1:#bbbbbb; transition: 140; }
+.card { bg: #ffffff; border: 1px:#dddddd; radius: 4; pad: 20; margin: 0,24; shadow: 8,2:#0000001f; }
 .meta { color: #bbbbbb; size: 13; link: #5cb85c; font: sans; }
 .lead { color: #999999; size: 16; font: serif; }
-.article-title { color: #373a3c; size: 28; weight: bold; font: serif; }
-.btn { bg: #5cb85c; color: #ffffff; radius: 4; pad: 10,8; size: 15; weight: bold; align: center; link: #ffffff; font: sans; hover-bg: #449d44; hover-border: 1:#398439; }
 .side { bg: #f3f3f3; border: 1px:#dddddd; radius: 4; pad: 16; font: sans; }
 .foot { color: #bbbbbb; size: 13; ta: center; margin: 30,0; link: #5cb85c; font: sans; }
 """
@@ -61,9 +59,9 @@ def nav(user):
                  nac.inline_path("/register", "注册")]
     with nac.box("nav"):
         with nac.row(gap=18):
-            with nac.box("brand", w=150):
+            with nac.box("brand"):
                 nac.p("conduit")
-            with nac.box(grow=1):
+            with nac.box():
                 nac.p(*joined(links))
     nac.gap()
 
@@ -95,9 +93,9 @@ def _opt(row, name, default=None):
 def byline(row, size=28):
     """头像 + 作者那一行。两栏：左边给头像固定宽度，右边吃掉剩下的。"""
     with nac.row(gap=10):
-        with nac.box(w=size + 2):
+        with nac.box():
             nac.avatar(row["author"], size)
-        with nac.box(grow=1):
+        with nac.box():
             with nac.box("meta"):
                 bits = []
                 if _opt(row, "following"):
@@ -179,9 +177,9 @@ def two_columns(left, right=None):
         left()
         return
     with nac.row(gap=24):
-        with nac.box(grow=2):
+        with nac.box():
             left()
-        with nac.box(grow=1):
+        with nac.box():
             right()
 
 

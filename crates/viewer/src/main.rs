@@ -498,6 +498,20 @@ const FONT_SANS_BOLD: &[u8] = include_bytes!("../assets/fonts/TitilliumWeb-Bold.
 const FONT_SERIF: &[u8] = include_bytes!("../assets/fonts/PTSerif-Regular.ttf");
 const FONT_SERIF_BOLD: &[u8] = include_bytes!("../assets/fonts/PTSerif-Bold.ttf");
 
+/// The width the client reserves for a row child, when it can know it up front.
+///
+/// Only one case qualifies: a box whose whole content is an avatar.
+fn row_child_width(child: &Block) -> Option<f32> {
+    match child {
+        Block::Box { children, .. } if children.len() == 1 => match &children[0] {
+            Block::Avatar { size, .. } => Some(*size),
+            _ => None,
+        },
+        Block::Avatar { size, .. } => Some(*size),
+        _ => None,
+    }
+}
+
 fn fnv1a(bytes: &[u8]) -> u64 {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     for byte in bytes {
@@ -894,9 +908,6 @@ struct Tab {
     saved_fields: HashMap<u16, HashMap<String, String>>,
     /// `[[sheet]]` rules, gathered before the first box is drawn.
     sheet: HashMap<String, Style>,
-    /// Counts boxes as they are drawn, so each one keeps its own hover state
-    /// across frames without needing an identity of its own.
-    box_seq: u32,
     shown_path: Option<String>,
     /// When the current page's `[[scene]]` timelines started. Reset on every
     /// page load, so a reload replays the animation instead of resuming it.
@@ -1042,7 +1053,6 @@ impl Tab {
             focus_input: false,
             saved_fields: HashMap::new(),
             sheet: HashMap::new(),
-            box_seq: 0,
             shown_path: None,
             scene_clock: None,
             target,
@@ -1717,8 +1727,11 @@ impl Tab {
         }
     }
 
-    /// Draws one `[[box]]`: margins, then a frame with background, border and
-    /// padding, then its children either stacked or in a row with `grow`.
+    /// Draws one `[[box]]`: margins, then a frame with background, border,
+    /// shadow and padding, then its children either stacked or in a row.
+    ///
+    /// Width is never the page's business: the box takes whatever room the
+    /// parent gives it.
     fn render_box(&mut self, ui: &mut egui::Ui, style: &Style, children: Vec<Block>, text: Text) {
         let sheet = self.sheet.clone();
         let class = style
@@ -1728,42 +1741,16 @@ impl Tab {
             .cloned()
             .unwrap_or_default();
         let merged = style.over(&class);
-        let seq = self.box_seq;
-        self.box_seq += 1;
-        let amount = self.hover_amount(ui, seq, &merged);
-        let paint = merged.blend(amount);
-        let mut inner = text.inherit(&merged);
-        // Fade from the colour the text already had, not from transparency: a
-        // box that inherits its colour would otherwise blank its own text.
-        if let Some(hover) = merged.hover_color {
-            inner.color = style::lerp_color(inner.color, hover, amount);
-        }
-        if let Some(link) = merged.hover_link {
-            inner.link = style::lerp_color(inner.link, link, amount);
-        }
+        let inner = text.inherit(&merged);
 
-        let hover_id = egui::Id::unique(("nac-hover", seq));
         let margin = merged.margin.unwrap_or((0.0, 0.0));
         if margin.1 > 0.0 {
             ui.add_space(margin.1);
         }
 
         let available = ui.available_width();
-        let want = merged
-            .width
-            .or(merged.max_width)
-            .map(|w| w.min(available))
-            .unwrap_or(available);
-        let centred = matches!(merged.align, Some(style::Align::Center)) && want < available - 1.0;
-        let offset = if centred { (available - want) / 2.0 } else { 0.0 };
-
-        // The box is placed by giving it a rectangle, not by nesting a
-        // horizontal layout: a horizontal inside a horizontal makes egui hand
-        // the whole remaining width to the first child, which is how a row of
-        // two boxes became a box plus a sliver at the far right.
         let mut rect = ui.available_rect_before_wrap();
-        rect.min.x += margin.0 + offset;
-        rect.max.x = rect.min.x + want;
+        rect.min.x += margin.0;
         let pad = merged.pad.unwrap_or((0.0, 0.0));
         let mut frame = egui::Frame::new().inner_margin(egui::Margin {
             left: pad.0 as i8,
@@ -1771,32 +1758,42 @@ impl Tab {
             top: pad.1 as i8,
             bottom: pad.1 as i8,
         });
-        if let Some(bg) = paint.bg {
+        if let Some(bg) = merged.bg {
             frame = frame.fill(bg);
         }
-        if let Some((width, colour)) = paint.border {
+        if let Some((width, colour)) = merged.border {
             frame = frame.stroke(egui::Stroke::new(width, colour));
         }
         if let Some(radius) = merged.radius {
             frame = frame.corner_radius(egui::CornerRadius::same(radius as u8));
         }
+        if let Some(shadow) = merged.shadow {
+            frame = frame.shadow(egui::epaint::Shadow {
+                offset: [0, shadow.offset as i8],
+                blur: shadow.blur as u8,
+                spread: 0,
+                color: shadow.color,
+            });
+        }
 
-        let shown = ui.scope_builder(
+        ui.scope_builder(
             egui::UiBuilder::new()
                 .max_rect(rect)
                 .layout(Layout::top_down(Align::Min)),
             |ui| {
-                ui.set_min_width(want);
-                ui.set_max_width(want);
+                let width = available - margin.0;
+                ui.set_min_width(width);
+                ui.set_max_width(width);
+                if let Some(amount) = merged.opacity {
+                    ui.set_opacity(amount);
+                }
                 frame.show(ui, |ui| {
-                    ui.set_min_width((want - pad.0 * 2.0).max(20.0));
-                    ui.set_max_width((want - pad.0 * 2.0).max(20.0));
+                    let inside = (width - pad.0 * 2.0).max(20.0);
+                    ui.set_min_width(inside);
+                    ui.set_max_width(inside);
                     if merged.row == Some(true) {
                         self.render_row(ui, children, &merged, inner);
                     } else {
-                        if let Some(h) = merged.min_height {
-                            ui.set_min_height(h);
-                        }
                         let cross = match inner.align {
                             Some(style::Align::Center) => egui::Align::Center,
                             Some(style::Align::Right) => egui::Align::Max,
@@ -1813,10 +1810,6 @@ impl Tab {
                 })
             },
         );
-        // Remembered for the next frame, which is what makes hover possible
-        // without asking the layout what it just built.
-        ui.ctx()
-            .data_mut(|d| d.insert_temp(hover_id, shown.inner.response.rect));
         if margin.1 > 0.0 {
             ui.add_space(margin.1);
         }
@@ -1847,26 +1840,6 @@ impl Tab {
         );
     }
 
-    /// How far into its hover look a box is, 0 for "not at all". Uses last
-    /// frame's rectangle because the box has not been laid out yet.
-    fn hover_amount(&self, ui: &egui::Ui, seq: u32, style: &Style) -> f32 {
-        if style.hover_bg.is_none() && style.hover_color.is_none() && style.hover_border.is_none()
-        {
-            return 0.0;
-        }
-        let id = egui::Id::unique(("nac-hover", seq));
-        let previous: Option<egui::Rect> = ui.ctx().data(|d| d.get_temp(id));
-        let over = previous.is_some_and(|rect| ui.ctx().rect_contains_pointer(ui.layer_id(), rect));
-        ui.ctx()
-            .animate_bool_with_time(id.with("t"), over, style.transition.unwrap_or(0.12))
-    }
-
-    /// Lays out a row of boxes by giving each one a rectangle.
-    ///
-    /// Widths come from the child's own `w`, or from sharing what is left in
-    /// proportion to `grow`; a child that says neither gets an equal share.
-    /// egui is not asked to run a horizontal layout here because a horizontal
-    /// inside a horizontal hands the whole remaining width to the first child.
     fn render_row(&mut self, ui: &mut egui::Ui, children: Vec<Block>, style: &Style, text: Text) {
         let gap = style.gap.unwrap_or(12.0);
         let area = ui.available_rect_before_wrap();
@@ -1875,24 +1848,24 @@ impl Tab {
             return;
         }
 
-        let mut fixed: Vec<Option<f32>> = vec![None; count];
-        let mut weights: Vec<f32> = vec![0.0; count];
-        for (slot, child) in children.iter().enumerate() {
-            let child_style = self.block_style(child);
-            match (child_style.width.or(child_style.max_width), child_style.grow) {
-                (Some(w), _) => fixed[slot] = Some(w.min(area.width()).max(1.0)),
-                (None, Some(grow)) if grow > 0.0 => weights[slot] = grow,
-                _ => weights[slot] = 1.0,
+        let mut fixed: Vec<Option<f32>> = children.iter().map(row_child_width).collect();
+        let taken: f32 = fixed.iter().flatten().sum();
+        let flexible = fixed.iter().filter(|w| w.is_none()).count();
+        let share = if flexible == 0 {
+            0.0
+        } else {
+            (area.width() - gap * (count - 1) as f32 - taken).max(20.0) / flexible as f32
+        };
+        for slot in fixed.iter_mut() {
+            if slot.is_none() {
+                *slot = Some(share);
             }
         }
-        let taken: f32 = fixed.iter().flatten().sum();
-        let weight_total: f32 = weights.iter().sum::<f32>().max(0.001);
-        let pool = (area.width() - gap * (count - 1) as f32 - taken).max(20.0);
 
         let mut x = area.min.x;
         let mut bottom = area.min.y;
         for (slot, child) in children.into_iter().enumerate() {
-            let width = fixed[slot].unwrap_or(pool * weights[slot] / weight_total);
+            let width = fixed[slot].unwrap_or(share);
             let rect = egui::Rect::from_min_max(
                 egui::pos2(x, area.min.y),
                 egui::pos2(x + width, area.max.y),
@@ -1915,22 +1888,6 @@ impl Tab {
         // One allocation for the whole row: the boxes inside placed themselves.
         let used = egui::Rect::from_min_max(area.min, egui::pos2(area.max.x, bottom));
         ui.allocate_rect(used, egui::Sense::hover());
-    }
-
-    /// The style a child would end up with, class rules included.
-    fn block_style(&self, block: &Block) -> Style {
-        match block {
-            Block::Box { style, .. } => {
-                let class = style
-                    .class
-                    .as_ref()
-                    .and_then(|name| self.sheet.get(name))
-                    .cloned()
-                    .unwrap_or_default();
-                style.over(&class)
-            }
-            _ => Style::default(),
-        }
     }
 
     fn render_term(&mut self, ui: &mut egui::Ui, term: &markup::Term) {
@@ -2224,7 +2181,6 @@ impl Tab {
     fn render_blocks(&mut self, ui: &mut egui::Ui) {
         let blocks = self.blocks.clone();
         self.sheet.clear();
-        self.box_seq = 0;
         collect_sheet(&blocks, &mut self.sheet);
         self.render_list(ui, blocks, Text::default());
     }

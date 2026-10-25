@@ -202,7 +202,7 @@ nac.table(
 | `with nac.tabs(*titles):` + `nac.tab()` | 页签 |
 | `with nac.box(类名, **属性):` | 样式层的盒子，见第 11 节 |
 | `with nac.row(**属性):` | 横排的盒子 |
-| `nac.avatar(名字, 尺寸=40)` | 按名字生成的头像，见 11.3 |
+| `nac.avatar(名字, 尺寸=40)` | 按名字生成的头像，见 11.5 |
 
 容器**可以互相嵌套**，深度不限：
 
@@ -636,13 +636,18 @@ with nac.term("WebShell.x64_x86", target=nac.page_id()):
 
 ## 11. 样式层：`[[sheet]]` 与 `[[box]]`
 
-这一节讲的是「客户端里的那个小 CSS」。它不是 CSS：没有选择器、没有层叠、
-没有伪类，只有**盒子**和**类**。
+这一节讲的是「客户端里的那个小样式层」。它不是 CSS，而且**刻意不是**：
+
+> 盒子只描述「这一块**是什么**」，不描述「它**多大、在哪**」。
+> 宽度、位置、什么时候变，都由客户端决定。
+
+所以这一层里没有 `width`、没有 `position`、没有百分比、没有媒体查询 ——
+同一个页面在 700px 的窗口和 2000px 的窗口里都得站得住。
 
 ```
 [[sheet]]
-.card { bg: #ffffff; border: 1px:#dddddd; radius: 4; pad: 18; margin: 0,14; }
-.nav  { bg: #5cb85c; color: #ffffff; pad: 14,12; weight: bold; link: #ffffff; }
+.card { bg: #ffffff; border: 1px:#dddddd; radius: 4; pad: 20; shadow: 8,2:#0000001f; }
+.nav  { bg: #5cb85c; color: #ffffff; pad: 8,16; weight: bold; link: #ffffff; }
 [[end]]
 
 [[box class=card]]
@@ -650,62 +655,77 @@ with nac.term("WebShell.x64_x86", target=nac.page_id()):
 [[end]]
 ```
 
-`[[sheet]]` 是整页的样式表，一行一条规则，选择器只能是 `.类名`；同名后者覆盖前者。
+`[[sheet]]` 是整页的样式表，一行一条规则，选择器只能是**一个类名**（`.card` 或 `card` 都行）；
+同名后者覆盖前者。`.a .b`、`.a > b`、`a:hover`、`[x]`、`@media` 这些写法会被**直接丢掉**，
+不会悄悄生效。
+
 `[[box]]` 是一个盒子，属性写在开标签里，也可以只用 `class` 让样式表来定。
 
-属性只有这些：
+### 11.1 全部属性，只有这些
 
 | 属性 | 值 | 说明 |
 |---|---|---|
 | `class` | 名字 | 从样式表取一条规则 |
-| `bg` / `color` | `#rrggbb`、`#rgb`、`white` | 底色 / 文字色（会往下继承） |
+| `bg` / `color` | `#rrggbb`、`#rgb`、`#rrggbbaa`、`white`、`black` | 底色 / 文字色（继承） |
+| `border` | `1:#dddddd` | 线宽:颜色 |
+| `radius` | `4` | 圆角 |
+| `shadow` | `8` 或 `8,2` 或 `8,2:#0000001f` | 模糊半径[,向下偏移][:颜色] |
+| `opacity` | `0.6` 或 `60` | 整块透明度，两种写法都是 60% |
 | `pad` / `margin` | `12` 或 `12,16` | 横向,纵向 |
 | `gap` | `12` | 横排时子盒子之间的距离 |
-| `w` / `maxw` / `minh` | `940` | 宽度 / 最大宽度 / 最小高度 |
-| `radius` | `4` | 圆角 |
-| `border` | `1:#dddddd` | 线宽:颜色 |
 | `dir` | `row` / `col` | 横排还是竖排（默认竖排） |
-| `grow` | `2` | 横排时按比例分剩余宽度 |
-| `align` | `center` / `left` / `right` | 盒子在父级里的对齐 |
-| `ta` / `text-align` | `center` / `left` / `right` | 盒子**里面**的文字对齐 |
+| `ta` | `center` / `left` / `right` | 盒子里**文字**的对齐 |
 | `size` / `weight` | `16` / `bold` | 字号、字重（继承） |
-| `font` | `sans` / `serif` / `mono` | 字体族（继承），见 11.1 |
-| `mono` / `italic` | `1` | 等宽、斜体（继承） |
+| `font` | `sans` / `serif` / `mono` | 字体族（继承，见 11.4） |
+| `italic` | `1` | 斜体（继承） |
 | `link` | `#5cb85c` | 盒子内链接的颜色（继承） |
-| `hover-bg` / `hover-color` | `#f5f5f5` | 鼠标移上去时的底色 / 字色 |
-| `hover-border` | `1:#bbbbbb` | 鼠标移上去时的边框 |
-| `hover-link` | `#449d44` | 鼠标移上去时盒子内链接的颜色 |
-| `transition` | `140` | 上面几项渐变过去要多少毫秒，默认 120 |
+| `nowrap` | `1` | 不折行（导航、标签行） |
 
-`nac` 里有对应的写法：
+数值只接受 `16` 或 `16px`。`50%`、`calc(...)`、`2em` 会被**当成没写**，因为它不是数字。
 
 ```python
-nac.sheet(".card { bg: #fff; border: 1px:#ddd; radius: 4; pad: 18; }")
+nac.sheet(".card { bg: #fff; border: 1px:#ddd; radius: 4; pad: 20; shadow: 8,2:#0000001f; }")
 
 with nac.box("card"):                 # 位置参数是类名
     nac.h3("标题")
     nac.p("正文")
 
 with nac.row(gap=24):                 # 横排
-    with nac.box(grow=2): ...         # 左边占 2 份
-    with nac.box(grow=1): ...         # 右边占 1 份
+    with nac.box():                   # 左边
+        ...
+    with nac.box():                   # 右边
+        ...
 
-nac.avatar("张三")                    # 头像，见 11.3
+nac.avatar("张三", 28)                # 见 11.4
 ```
-
-横排的宽度是这样定的：先给写了 `w` 的盒子按 `w` 留位置，剩下的按 `grow` 的比例分；
-**两样都没写的盒子拿平分的一份**（不是「按内容撑开」——内容多宽要等排版完才知道，
-而宽度得在排版前就定下来）。
 
 `class` 是 Python 关键字，所以类名用第一个位置参数传，或者写 `cls="card"`。
 
-**能做的**：绿导航条、白底描边圆角卡片、居中容器（`maxw` + `align=center`）、
-2:1 分栏、按类换字色字号、链接配色、悬停变色、三种自带字体。
+### 11.2 横排的宽度是客户端算的（`dir=row`）
 
-**做不到的**：`position`、浮动、`calc()`、媒体查询、动画（除了悬停的渐变）、
-`z-index`、真正的文字排版（行高是固定的，字距调不了）。
+页面能说的只有「这几个块并排」，剩下的由客户端定：
 
-### 11.1 字体：三种，都编在客户端里
+- **只有一个头像的盒子**（里面只有 `nac.avatar(...)`）→ 宽 = 头像的尺寸
+- **其余子盒子** → 平分剩下的宽度，再减去 `gap`
+
+所以 2:1 分栏做不到，也**不需要**做到 —— 想要主次，可以少放一栏，
+或者用字号和留白来表达。想精确控制比例的排版，是这一层明确不接受的需求。
+
+### 11.3 这一层不会长成 CSS
+
+判据只有一句：**属性只能描述「这一块是什么」，不能描述「它在哪、多大、什么时候变」。**
+
+以下这些永远不会有，问「能不能加」的时候先看这张表：
+
+`position` `float` `z-index` `overflow` `display:grid/table` `flex-wrap`
+`justify-content` `宽度/百分比` `calc()` `选择器（后代/相邻/属性/伪类）`
+`::before` `::after` `content` `@media` `@container` `@import` `@keyframes`
+`CSS 变量` `!important` `url()` `@font-face` `transform` `box-sizing`
+
+理由不是洁癖：这些东西一旦进来，客户端就得实现一个布局求解器和一个层叠引擎，
+而那是另一个项目（也是全部 CSS 玄学的来源）。
+
+### 11.4 字体：三种，都编在客户端里
 
 | `font=` | 用的字 | 用在哪 |
 |---|---|---|
@@ -713,27 +733,13 @@ nac.avatar("张三")                    # 头像，见 11.3
 | `serif` | PT Serif + CJK 兜底 | 正文、大标题 |
 | `mono` | 系统等宽 + CJK 兜底 | 代码 |
 
-三个字体文件（Titillium Web、PT Serif）都跟着客户端一起编译进二进制，
-许可证是 SIL OFL，见 `crates/viewer/assets/fonts/OFL-*.txt`。
-所以同一个页面在谁的电脑上都是同一副字，不会因为你装了别的字体而变。
+字体文件跟着客户端一起编译进二进制，许可证是 SIL OFL
+（见 `crates/viewer/assets/fonts/OFL-*.txt`）。所以同一个页面在谁的电脑上都是同一副字。
 
-中文不在这些字体里，会落到系统 CJK 字体（Windows 上是等线）。
-这是**故意的**：CJK 字体动辄十几兆，编进客户端不值得。
+中文不在这两个字体里，会落到系统 CJK 字体（Windows 上是等线）。
+这是故意的：CJK 字体动辄十几兆，编进客户端不值得。
 
-### 11.2 悬停：只改颜色，不改尺寸
-
-`hover-*` 只在鼠标压上去时改变**画出来的颜色**（底色、字色、边框色），
-不会改变任何尺寸 —— 所以鼠标移过去不会把周围的东西挤动一下。
-`transition` 是渐变时长，单位毫秒；写 `0` 就是瞬间换。
-
-```python
-nac.sheet(".card { bg: #fff; border: 1px:#ddd; hover-border: 1:#bbb; transition: 140; }")
-```
-
-判断悬停用的是**上一帧**画出来的矩形（因为这一帧还没排版，不知道盒子在哪）。
-所以刚打开页面的那一帧谁也不算悬停，第二帧开始才准。
-
-### 11.3 头像：`[[avatar 名字 尺寸]]`
+### 11.5 头像：`[[avatar 名字 尺寸]]`
 
 ```python
 nac.avatar("张三")        # 40
@@ -745,13 +751,13 @@ nac.avatar("张三", 28)    # 卡片里的小头像
 
 想放一张真照片，用 `nac.img()`（图片在发布时就打包好了，见第 6 节）。
 
-写法上的两个坑：
+### 11.6 写法上的三个坑
 
 - 连续两行非空文字属于同一段，盒子不会替你分段 —— 想分开就 `nac.gap()`
-- 一张样式表写在页面开头；写在后面也认，因为渲染前会先扫一遍
 - `nac.sheet()` 逐行发出去，所以**一条规则必须写在一行里**；跨行会被拆坏
+- 一张样式表写在页面开头；写在后面也认，因为渲染前会先扫一遍
 
-对照用的两个文件在 `deploy/`：`reference.html` 是同一个样式表的手写 CSS 版，
+对照用的文件在 `deploy/`：`reference.html` 是同一份样式表的手写 CSS 版，
 `ours.png` + `compare.html` 是客户端和浏览器并排的结果。
 
 ## 12. 页面出错时怎么查

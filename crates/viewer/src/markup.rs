@@ -677,10 +677,18 @@ fn parse_sheet(lines: &[&str], i: &mut usize) -> Vec<(String, Style)> {
         let Some((selector, body)) = line.split_once('{') else {
             continue;
         };
-        let name = selector.trim().trim_start_matches('.').to_string();
-        if name.is_empty() {
+        // One class name, nothing else. `.a .b`, `.a > .b`, `@media`, `a:hover`
+        // and `[data-x]` are all dropped here, so they can never quietly start
+        // working: the style layer is not allowed to grow selectors.
+        let name = selector.trim().trim_start_matches('.');
+        let plain = !name.is_empty()
+            && name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+        if !plain {
             continue;
         }
+        let name = name.to_string();
         let body = body.trim_end_matches('}');
         let style = Style::from_declarations(body);
         if let Some(slot) = out.iter_mut().find(|(existing, _)| *existing == name) {
@@ -1249,6 +1257,29 @@ mod tests {
                 assert_eq!(*size2, 72.0);
             }
             other => panic!("expected two avatars, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_sheet_rule_is_one_class_name_and_nothing_else() {
+        let src = concat!(
+            "[[sheet]]\n",
+            ".card { pad: 16; }\n",
+            "card { pad: 8; }\n",
+            ".a .b { pad: 4; }\n",
+            ".a > .b { pad: 2; }\n",
+            "@media (max-width: 600px) { pad: 1; }\n",
+            ".a:hover { pad: 0; }\n",
+            "[[end]]\n"
+        );
+        match only(&parse(src)) {
+            Block::Sheet(rules) => {
+                let names: Vec<&str> = rules.iter().map(|(n, _)| n.as_str()).collect();
+                // `.card` and `card` are the same class; the second rule wins.
+                assert_eq!(names, vec!["card"]);
+                assert_eq!(rules[0].1.pad, Some((8.0, 8.0)));
+            }
+            other => panic!("expected a sheet, got {other:?}"),
         }
     }
 

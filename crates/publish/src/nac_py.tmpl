@@ -535,11 +535,12 @@ def avatar(name, size=40):
 # --------------------------------------------------------------- L. 样式
 
 #: 盒子的属性名与 CSS 里写的名字一一对应，两种写法都收（k=v 或 k: v）。
+# 只有这些。没有宽度、没有位置、没有 hover —— 那些由客户端决定，
+# 页面说了不算（见 docs/authoring.md 第 11 节）。
 BOX_KEYS = {
-    "class", "bg", "color", "pad", "margin", "gap", "w", "maxw", "minh",
-    "radius", "border", "dir", "grow", "align", "ta", "size", "weight", "font",
-    "mono", "italic", "link", "nowrap",
-    "hover-bg", "hover-color", "hover-border", "hover-link", "transition",
+    "class", "bg", "color", "pad", "margin", "gap", "radius", "border", "dir",
+    "ta", "size", "weight", "font", "mono", "italic", "link", "nowrap",
+    "shadow", "opacity",
 }
 
 
