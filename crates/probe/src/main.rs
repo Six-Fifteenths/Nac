@@ -42,7 +42,11 @@ fn main() {
     }
     let _ = TLS_CONFIG.get();
     if args.is_empty() {
-        eprintln!("usage: probe [--addr host:port] manifest|page <id>|image <id>|submit <id> k=v...");
+        eprintln!(
+            "usage: probe [--tls-pin-file pin] [--addr host:port] [--path /地址] \
+             manifest|hello|health|page <id>|image <id>|image-stream <id>\
+             |submit <id> k=v...|resolve <名字>"
+        );
         std::process::exit(2);
     }
 

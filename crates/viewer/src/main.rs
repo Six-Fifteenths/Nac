@@ -167,6 +167,21 @@ fn tab_chip(ui: &mut egui::Ui, tab: &Tab, active: bool, can_close: bool) -> TabH
     hit
 }
 
+/// Whether the address bar should be rewritten from the tab's own address.
+///
+/// The rule that used to be missing: text the reader typed is never thrown away.
+/// While an address committed from the bar is still loading, the bar keeps what
+/// was typed; once it lands, the bar shows where it actually ended up.
+fn should_sync_address(
+    focused: bool,
+    holding: bool,
+    edited: bool,
+    shown: &str,
+    want: &str,
+) -> bool {
+    shown != want && !holding && (!focused || !edited)
+}
+
 /// Caps a title so a narrow window still fits a few tabs. Counts characters, not
 /// bytes, so a Chinese title is cut at a sensible place.
 fn shorten(text: &str, limit: usize) -> String {
@@ -810,6 +825,9 @@ struct Tab {
     error: String,
     scroll_top: bool,
     loader: loader::Loader,
+    /// Whether the address bar has the caret. A page must not steal focus from
+    /// it, or keystrokes meant for the address vanish into a form field.
+    address_focused: bool,
     focus_input: bool,
     saved_fields: HashMap<u16, HashMap<String, String>>,
     shown_path: Option<String>,
@@ -832,7 +850,10 @@ struct Viewer {
     addr_input: String,
     addr_focus: bool,
     addr_typing: bool,
-    pending_sync: bool,
+    addr_hold: bool,
+    /// Set the moment the reader edits the bar, cleared when the text is
+    /// accepted or dropped. Keeps the page from rewriting what is being typed.
+    addr_edited: bool,
     last_title: String,
 }
 
@@ -872,7 +893,8 @@ impl Viewer {
             addr_input: String::new(),
             addr_focus: false,
             addr_typing: false,
-            pending_sync: false,
+            addr_hold: false,
+            addr_edited: false,
             last_title: String::new(),
         };
         viewer.open_tab(site, start_page);
@@ -893,7 +915,8 @@ impl Viewer {
         let uid = NEXT_TAB_UID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         self.tabs.push(Tab::new(uid, &self.routes, site, target));
         self.active = self.tabs.len() - 1;
-        self.pending_sync = true;
+        self.addr_hold = false;
+        self.addr_edited = false;
     }
 
     /// Opens the default site in a new tab. Used by the `+` button and `Ctrl+T`.
@@ -915,7 +938,8 @@ impl Viewer {
         let next = active_after_close(self.tabs.len(), self.active, index);
         self.tabs.remove(index);
         self.active = next;
-        self.pending_sync = true;
+        self.addr_hold = false;
+        self.addr_edited = false;
     }
 }
 
@@ -947,6 +971,7 @@ impl Tab {
             error: String::new(),
             scroll_top: true,
             loader: loader::Loader::new(endpoint, tls),
+            address_focused: false,
             focus_input: false,
             saved_fields: HashMap::new(),
             shown_path: None,
@@ -1840,7 +1865,10 @@ impl Tab {
                         resp_opt = Some(resp);
                     });
                     if let Some(resp) = resp_opt {
-                        if self.focus_input {
+                        // Never steal the caret from the address bar: a page that
+                        // finishes loading while the reader is typing an address
+                        // would otherwise eat every keystroke after that point.
+                        if self.focus_input && !self.address_focused {
                             resp.request_focus();
                             self.focus_input = false;
                         }
@@ -2091,7 +2119,7 @@ impl eframe::App for Viewer {
         }
         if ctx.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::Tab)) {
             self.active = (self.active + 1) % self.tabs.len();
-            self.pending_sync = true;
+            self.addr_hold = false;
         }
 
         let typing = ctx.egui_wants_keyboard_input();
@@ -2099,19 +2127,21 @@ impl eframe::App for Viewer {
             || (!typing && ctx.input(|i| i.key_pressed(egui::Key::R)))
         {
             self.with_tab(|tab, routes| tab.reload(routes));
-            self.pending_sync = true;
+            self.addr_hold = false;
         }
         if ctx.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::Enter)) {
             self.tab_mut().submit();
         }
         if (ctx.input(|i| i.key_pressed(egui::Key::Escape)) && !self.addr_typing)
             || ctx.input(|i| i.modifiers.alt && i.key_pressed(egui::Key::ArrowLeft))
-        {            self.with_tab(|tab, routes| tab.back(routes));
-            self.pending_sync = true;
+        {
+            self.with_tab(|tab, routes| tab.back(routes));
+            self.addr_hold = false;
+            self.addr_edited = false;
         }
         if ctx.input(|i| i.modifiers.alt && i.key_pressed(egui::Key::ArrowRight)) {
             self.with_tab(|tab, routes| tab.forward(routes));
-            self.pending_sync = true;
+            self.addr_hold = false;
         }
 
         // ------------------------------------------------------------ tab bar
@@ -2145,7 +2175,8 @@ impl eframe::App for Viewer {
         if let Some(index) = switch_to {
             if index != self.active {
                 self.active = index;
-                self.pending_sync = true;
+                self.addr_hold = false;
+                self.addr_edited = false;
             }
         }
         if let Some(index) = close {
@@ -2164,55 +2195,87 @@ impl eframe::App for Viewer {
         let back_ok = self.tab().trail.can_back();
         let forward_ok = self.tab().trail.can_forward();
 
+        // One row, one height: every control in the toolbar is the same size, so
+        // the bar does not reflow when a glyph changes width.
+        const BUTTON: egui::Vec2 = egui::vec2(30.0, 30.0);
+        // Flat until touched: a row of grey slabs reads as a dialog, not as a
+        // browser. The button only lights up under the pointer.
+        let nav = |ui: &mut egui::Ui, glyph: &str, enabled: bool, tip: &str| -> bool {
+            let (rect, resp) = ui.allocate_exact_size(BUTTON, egui::Sense::click());
+            let resp = resp.on_hover_text(tip);
+            let down = enabled && resp.is_pointer_button_down_on();
+            let hot = enabled && resp.hovered();
+            if hot {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                let bg = if down {
+                    Color32::from_rgb(211, 218, 230)
+                } else {
+                    Color32::from_rgb(234, 237, 243)
+                };
+                ui.painter()
+                    .rect_filled(rect, egui::CornerRadius::same(7), bg);
+            }
+            let ink = if enabled {
+                Color32::from_rgb(48, 54, 64)
+            } else {
+                Color32::from_rgb(183, 187, 195)
+            };
+            ui.painter().text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                glyph,
+                egui::FontId::proportional(16.0),
+                ink,
+            );
+            enabled && resp.clicked()
+        };
+
         egui::Panel::top("top").show(ui, |ui| {
-            ui.add_space(4.0);
+            ui.add_space(6.0);
             ui.horizontal(|ui| {
-                if ui
-                    .add_enabled(back_ok, egui::Button::new(RichText::new("←").size(18.0)))
-                    .on_hover_text("返回  (Esc / Alt+←)")
-                    .clicked()
-                {
+                ui.add_space(6.0);
+                if nav(ui, "←", back_ok, "后退  (Alt+←)") {
                     want_back = true;
                 }
-                if ui
-                    .add_enabled(
-                        forward_ok,
-                        egui::Button::new(RichText::new("→").size(18.0)),
-                    )
-                    .on_hover_text("前进  (Alt+→)")
-                    .clicked()
-                {
+                if nav(ui, "→", forward_ok, "前进  (Alt+→)") {
                     want_forward = true;
                 }
-                if ui
-                    .add(egui::Button::new(RichText::new("⟳").size(16.0)))
-                    .on_hover_text("重新载入当前页  (F5)")
-                    .clicked()
-                {
+                if nav(ui, "⟳", true, "刷新  (F5)") {
                     want_reload = true;
                 }
-                if ui
-                    .add(egui::Button::new(RichText::new("⌂").size(16.0)))
-                    .on_hover_text("回到首页")
-                    .clicked()
-                {
+                if nav(ui, "⌂", true, "回到首页") {
                     want_home = true;
                 }
+                ui.add_space(4.0);
 
-                let width = (ui.available_width() - 76.0).max(120.0);
+                let width = (ui.available_width() - 14.0).max(120.0);
                 let hint = self
                     .routes
                     .default_site()
                     .map(|site| format!("{}/路径", site.name))
-                    .unwrap_or_else(|| "/路径".to_string());
-                let resp = ui.add(
-                    egui::TextEdit::singleline(&mut self.addr_input)
-                        .font(egui::TextStyle::Monospace)
-                        .desired_width(width)
-                        .desired_rows(1)
-                        .margin(egui::Margin::symmetric(8, 5))
-                        .hint_text(hint),
-                );
+                    .unwrap_or_else(|| "名字/路径".to_string());
+                // A visible box, so the bar reads as "type here" instead of as a
+                // line of text floating in the toolbar. Focused, it gets a blue ring.
+                let ring = if self.addr_typing {
+                    egui::Stroke::new(1.5, Color32::from_rgb(74, 132, 199))
+                } else {
+                    egui::Stroke::new(1.0, Color32::from_rgb(208, 211, 220))
+                };
+                let resp = egui::Frame::new()
+                    .fill(Color32::from_rgb(255, 255, 255))
+                    .stroke(ring)
+                    .corner_radius(egui::CornerRadius::same(7))
+                    .inner_margin(egui::Margin::symmetric(2, 2))
+                    .show(ui, |ui| {
+                        ui.add_sized(
+                            [width - 4.0, 26.0],
+                            egui::TextEdit::singleline(&mut self.addr_input)
+                                .font(egui::TextStyle::Monospace)
+                                .margin(egui::Margin::symmetric(7, 5))
+                                .hint_text(hint),
+                        )
+                    })
+                    .inner;
                 if self.addr_focus {
                     resp.request_focus();
                     // Ctrl+L is meant to be "replace this", not "append to it".
@@ -2227,40 +2290,56 @@ impl eframe::App for Viewer {
                     }
                     self.addr_focus = false;
                 }
-                if resp.has_focus() {
-                    if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                        goto = Some(self.addr_input.clone());
-                        resp.surrender_focus();
-                    } else if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                        // Put back what the tab is actually showing and leave.
-                        self.pending_sync = true;
-                        resp.surrender_focus();
-                    }
+                if resp.changed() {
+                    self.addr_edited = true;
+                }
+                // A single-line `TextEdit` gives up focus the moment Enter is
+                // pressed, so `has_focus` alone would never see it -- that is
+                // why Enter in the address bar used to do nothing at all.
+                let mine = resp.has_focus() || resp.lost_focus();
+                if mine && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    goto = Some(self.addr_input.clone());
+                    // Hold the typed text until the page it leads to lands,
+                    // then let the bar show where we actually ended up. Focus
+                    // stays put, so a second address can be typed now.
+                    self.addr_hold = true;
+                    self.addr_edited = false;
+                    resp.request_focus();
+                } else if mine && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                    // Put back what the tab is actually showing and leave.
+                    self.addr_hold = false;
+                    self.addr_edited = false;
+                    self.addr_input = self.tab().address_text();
+                    resp.surrender_focus();
                 }
                 self.addr_typing = resp.has_focus();
             });
-            ui.add_space(4.0);
+            ui.add_space(6.0);
         });
 
         if want_back {
             self.with_tab(|tab, routes| tab.back(routes));
-            self.pending_sync = true;
+            self.addr_hold = false;
         }
         if want_forward {
             self.with_tab(|tab, routes| tab.forward(routes));
-            self.pending_sync = true;
+            self.addr_hold = false;
         }
         if want_reload {
             self.with_tab(|tab, routes| tab.reload(routes));
-            self.pending_sync = true;
+            self.addr_hold = false;
         }
         if want_home {
             self.tab_mut().home_page();
-            self.pending_sync = true;
+            self.addr_hold = false;
         }
         if let Some(input) = goto {
-            self.pending_sync = true;
             self.with_tab_routes(|tab, routes| tab.go(routes, &input));
+            // If that address could not even start loading (bad syntax), do not
+            // sit on the typed text: let the bar fall back to the real address.
+            if !self.tab().loading {
+                self.addr_hold = false;
+            }
         }
 
         // --------------------------------------------------------- status bar
@@ -2348,6 +2427,8 @@ impl eframe::App for Viewer {
                     ui.vertical(|ui| {
                         ui.set_max_width((width - pad * 2.0).max(320.0));
                         ui.add_space(18.0);
+                        let typing = self.addr_typing;
+                        self.tab_mut().address_focused = typing;
                         self.tab_mut().render_blocks(ui);
                         ui.add_space(60.0);
                     });
@@ -2356,10 +2437,17 @@ impl eframe::App for Viewer {
         });
         self.tab_mut().scroll_top = false;
 
+        // The bar mirrors the tab's address -- but never over text the reader
+        // typed. Rewriting the buffer mid-keystroke is what made typing feel
+        // like it was being eaten and the caret jump back.
         let want = self.tab().address_text();
-        if self.addr_input != want && (!self.addr_typing || self.pending_sync) {
+        if self.addr_hold && !self.tab().loading {
+            self.addr_hold = false;
+        }
+        let focused = self.addr_typing;
+        if should_sync_address(focused, self.addr_hold, self.addr_edited, &self.addr_input, &want) {
             self.addr_input = want;
-            self.pending_sync = false;
+            self.addr_edited = false;
         }
     }
 }
@@ -2368,7 +2456,8 @@ impl eframe::App for Viewer {
 mod tests {
     use super::{
         active_after_close, looks_like_host, net, normalize_path, parse_address,
-        resolve_address, resolve_path, routes, shorten, stash_fields, Address, Place, Trail,
+        resolve_address, resolve_path, routes, shorten, should_sync_address, stash_fields,
+        Address, Place, Trail,
     };
     use std::collections::HashMap;
 
@@ -2630,6 +2719,25 @@ mod tests {
         assert!(!looks_like_host(""));
         assert!(!looks_like_host("about"));
         assert!(!looks_like_host("127.0.0.1:7000"));
+    }
+
+    #[test]
+    fn typing_is_never_overwritten_by_the_tab() {
+        // The bug this guards: every frame the model won and the caret jumped
+        // back, so keystrokes appeared to vanish.
+        assert!(!should_sync_address(true, false, true, "nac.l", "nac.local/"));
+        assert!(!should_sync_address(true, true, false, "", "nac.local/"));
+        // A resolved address changes the tab under the reader's cursor; if they
+        // have not touched the bar, it should follow.
+        assert!(should_sync_address(true, false, false, "nac.local/", "iris.out/"));
+        // Just committed an address: keep showing it while it loads, focused or
+        // not -- otherwise the bar snaps back to the old address.
+        assert!(!should_sync_address(false, true, false, "iris.out", "nac.local/"));
+        assert!(!should_sync_address(true, true, true, "iris.out", "nac.local/"));
+        // Idle and out of date: follow the tab.
+        assert!(should_sync_address(false, false, false, "nac.local/", "iris.out/"));
+        // Idle and already right: do nothing (no needless caret resets).
+        assert!(!should_sync_address(false, false, false, "iris.out/", "iris.out/"));
     }
 
     #[test]
